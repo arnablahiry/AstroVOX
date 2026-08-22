@@ -2,8 +2,6 @@
   <img src="assets/astrovox_banner.png" alt="AstroVOX" width="100%">
 </p>
 
-<h1 align="center">AstroVOX</h1>
-
 <p align="center">
   A GUI for visualizing astrophysical and cosmological 3D data cubes — spatial (PPP) cubes and position-position-velocity (PPV) cubes alike — powered by <a href="https://pyvista.org/">PyVista</a>.
 </p>
@@ -12,7 +10,7 @@
 
 ## Overview
 
-AstroVOX is a desktop visualization application for volumetric data cubes commonly encountered in astronomy and astrophysics: interferometric and single-dish spectral-line cubes (e.g. HI, CO), integral-field spectroscopy data, and simulated cosmological/hydrodynamical volumes (e.g. CAMELS, IllustrisTNG). It renders the cube as an interactive, GPU-accelerated 3D volume built on [PyVista](https://pyvista.org/) and [VTK](https://vtk.org/), wrapped in a control panel purpose-built for cube inspection rather than general-purpose plotting.
+**AstroVOX** is a desktop visualization application for volumetric data cubes commonly encountered in astronomy and astrophysics: interferometric and single-dish spectral-line cubes (e.g. HI, CO), integral-field spectroscopy data, and simulated cosmological/hydrodynamical volumes (e.g. CAMELS, IllustrisTNG). It renders the cube as an interactive, GPU-accelerated 3D volume built on [PyVista](https://pyvista.org/) and [VTK](https://vtk.org/), wrapped in a control panel purpose-built for cube inspection rather than general-purpose plotting.
 
 Any cube axis ordering is supported and labelled accordingly:
 
@@ -41,14 +39,14 @@ Any cube axis ordering is supported and labelled accordingly:
 **Light/dark theme** toggle, and a one-click reset back to defaults.
 
 <p align="center">
-  <img src="assets/astro_dark.png" width="49%">
-  <img src="assets/astro_light.png" width="49%">
+  <img src="assets/astro_dark.png" width="100%"><br>
+  <img src="assets/astro_light.png" width="100%">
 </p>
 <p align="center"><em>A PPV spectral-line cube of the ALMA-observed IC5179 galaxy FITS file in dark and light theme.</em></p>
 
 <p align="center">
-  <img src="assets/cosmo_dark.png" width="49%">
-  <img src="assets/cosmo_light.png" width="49%">
+  <img src="assets/cosmo_dark.png" width="100%"><br>
+  <img src="assets/cosmo_light.png" width="100%">
 </p>
 <p align="center"><em>A PPP cosmological simulation volume NumPy array in dark and light theme - CAMELS Multifield Dataset IllustrisTNG Suite, total matter ensity grid.</em></p>
 

@@ -283,6 +283,26 @@ _DARK_COLORMAPS = ["plasma", "inferno", "magma", "viridis", "cividis"]
 _LIGHT_COLORMAPS = ["cubehelix_r", "gray_r", "bone_r", "pink_r", "afmhot_r"]
 
 
+def _compose_colorbar_title(name: str, unit: str) -> str:
+    """bold(quantity name) on its own line, [unit] regular beneath it —
+    e.g. **Intensity**\\n[Jy/beam]. Rendered via mathtext's own
+    \\mathbf{}, since _build_mathtext_actor2d now renders the colorbar
+    title at "normal" base weight (see viewer.py) specifically so this
+    mixed weighting can happen at all. Spaces inside \\mathbf{} are
+    escaped as "\\ " — bare spaces are collapsed by math mode, which is
+    why an unescaped multi-word name used to render with no gaps at all
+    (e.g. "Total Matter Density" -> "TotalMatterDensity")."""
+    name = name.strip()
+    unit = unit.strip()
+    escaped = name.replace("$", r"\$").replace(" ", r"\ ")
+    bold_name = f"$\\mathbf{{{escaped}}}$" if escaped else ""
+    if bold_name and unit:
+        return f"{bold_name}\n[{unit}]"
+    if unit:
+        return f"[{unit}]"
+    return bold_name
+
+
 class SquareViewportContainer(QtWidgets.QWidget if QtWidgets is not None else object):
     """Hosts a single child widget, always sized/centered as a square
     inscribed in the available space, regardless of window resizing."""
@@ -516,10 +536,14 @@ class PillSelector(QtWidgets.QWidget if QtWidgets is not None else object):
     if QtCore is not None:
         valueChanged = QtCore.pyqtSignal(str)
 
-    def __init__(self, values, selected=None, parent=None, pill_height=24, pill_width=None):
+    def __init__(
+        self, values, selected=None, parent=None, pill_height=24, pill_width=None,
+        pill_padding="2px 10px", expand=False,
+    ):
         super().__init__(parent)
         self._values = list(values)
         self._buttons = {}
+        self._pill_padding = pill_padding
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -534,10 +558,15 @@ class PillSelector(QtWidgets.QWidget if QtWidgets is not None else object):
             btn.setFixedHeight(pill_height)
             if pill_width is not None:
                 btn.setFixedWidth(pill_width)
+            elif expand:
+                # Stretch to share the row equally instead of hugging
+                # its own text width — used to make the pill row fill
+                # whatever width its container gives it.
+                btn.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
             btn.clicked.connect(lambda _checked, v=val: self.valueChanged.emit(v))
             self._group.addButton(btn)
             self._buttons[val] = btn
-            layout.addWidget(btn)
+            layout.addWidget(btn, 1 if expand else 0)
 
         selected = selected or (self._values[0] if self._values else None)
         if selected in self._buttons:
@@ -581,7 +610,7 @@ class PillSelector(QtWidgets.QWidget if QtWidgets is not None else object):
                     font-family: Georgia, 'Times New Roman';
                     font-size: 10px;
                     font-weight: bold;
-                    padding: 2px 10px;
+                    padding: {self._pill_padding};
                 }}
                 QPushButton:hover:!checked {{
                     background: {palette['PILL_HOV']};
@@ -601,7 +630,7 @@ class ToggleGrid(QtWidgets.QWidget if QtWidgets is not None else object):
     if QtCore is not None:
         toggled = QtCore.pyqtSignal(str, bool)
 
-    def __init__(self, labels_defaults, parent=None):
+    def __init__(self, labels_defaults, parent=None, extra_widget=None):
         super().__init__(parent)
         self._buttons = {}
 
@@ -620,6 +649,13 @@ class ToggleGrid(QtWidgets.QWidget if QtWidgets is not None else object):
             btn.clicked.connect(lambda checked, name=label: self.toggled.emit(name, checked))
             self._buttons[label] = btn
             grid.addWidget(btn, i // 2, i % 2)
+
+        # An optional non-toggle widget dropped into the next open cell
+        # (e.g. a zoom control sitting beside the last pill) — sized to
+        # match the pills around it since it shares the same grid cell.
+        if extra_widget is not None:
+            next_i = len(labels_defaults)
+            grid.addWidget(extra_widget, next_i // 2, next_i % 2)
 
     def is_checked(self, label):
         btn = self._buttons.get(label)
@@ -1615,6 +1651,199 @@ class StaticFrameControl(QtWidgets.QWidget if QtWidgets is not None else object)
         """)
 
 
+class ExternalLinkIcon(QtWidgets.QWidget if QtWidgets is not None else object):
+    """A small "open in new window" glyph (rounded square, open at the
+    top-right corner, with a diagonal arrow escaping through the gap) —
+    painted directly rather than a font glyph, same reasoning as
+    PlusIcon: guarantees it's centred exactly in its own rect regardless
+    of font metrics."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._color = QtGui.QColor("white")
+
+    def set_color(self, color):
+        self._color = QtGui.QColor(color)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        side = min(w, h)
+        pen = QtGui.QPen(self._color)
+        pen.setWidthF(max(1.3, side * 0.09))
+        pen.setCapStyle(QtCore.Qt.RoundCap)
+        pen.setJoinStyle(QtCore.Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(QtCore.Qt.NoBrush)
+
+        margin = side * 0.16
+        gap = side * 0.30  # the corner gap the arrow escapes through
+        radius = side * 0.12
+        left, top = margin, margin + gap * 0.55
+        right, bottom = w - margin - gap * 0.35, h - margin
+
+        path = QtGui.QPainterPath()
+        path.moveTo(right - radius, top)
+        path.lineTo(left + radius, top)
+        path.arcTo(left, top, radius * 2, radius * 2, 90, 90)
+        path.lineTo(left, bottom - radius)
+        path.arcTo(left, bottom - radius * 2, radius * 2, radius * 2, 180, 90)
+        path.lineTo(right - radius, bottom)
+        path.arcTo(right - radius * 2, bottom - radius * 2, radius * 2, radius * 2, 270, 90)
+        path.lineTo(right, top + radius * 0.6)
+        painter.drawPath(path)
+
+        arrow_start = QtCore.QPointF(w * 0.42, h * 0.58)
+        arrow_end = QtCore.QPointF(w - margin * 0.6, margin * 0.6)
+        painter.drawLine(arrow_start, arrow_end)
+        angle = math.atan2(arrow_end.y() - arrow_start.y(), arrow_end.x() - arrow_start.x())
+        head_len = side * 0.24
+        for delta in (math.radians(150), -math.radians(150)):
+            a = angle + delta
+            tip = QtCore.QPointF(arrow_end.x() + head_len * math.cos(a), arrow_end.y() + head_len * math.sin(a))
+            painter.drawLine(arrow_end, tip)
+
+
+class ProjectionControl(QtWidgets.QWidget if QtWidgets is not None else object):
+    """Start/Reset button + a blocky progress bar + a square "open in a
+    new window" button — drives the 2D projection / moment-0 computation
+    (see CubeViewerApp._on_projection_start_clicked). The progress bar
+    stays low-opacity until Start is clicked, and the open button stays
+    disabled until the computation actually finishes."""
+
+    if QtCore is not None:
+        startClicked = QtCore.pyqtSignal()
+        openClicked = QtCore.pyqtSignal()
+        resetClicked = QtCore.pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._state = "idle"  # idle | running | done
+        self._palette = None
+
+        outer = QtWidgets.QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(6)
+
+        self._accent_box = QtWidgets.QWidget(self)
+        self._accent_box.setFixedHeight(28)
+        self._accent_box.setCursor(QtCore.Qt.PointingHandCursor)
+        self._accent_box.mousePressEvent = self._on_accent_box_pressed
+        box_row = QtWidgets.QHBoxLayout(self._accent_box)
+        box_row.setContentsMargins(14, 0, 14, 0)
+        self._text_label = QtWidgets.QLabel("Start", self._accent_box)
+        box_row.addWidget(self._text_label)
+        outer.addWidget(self._accent_box)
+
+        self._progress = QtWidgets.QProgressBar(self)
+        self._progress.setFixedHeight(28)
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
+        self._progress.setTextVisible(False)
+        self._progress_effect = QtWidgets.QGraphicsOpacityEffect(self._progress)
+        self._progress.setGraphicsEffect(self._progress_effect)
+        self._progress_effect.setOpacity(0.35)
+        outer.addWidget(self._progress, 1)
+
+        self._open_btn = QtWidgets.QPushButton(self)
+        self._open_btn.setFixedSize(28, 28)
+        self._open_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._open_btn.setEnabled(False)
+        open_layout = QtWidgets.QHBoxLayout(self._open_btn)
+        open_layout.setContentsMargins(5, 5, 5, 5)
+        self._open_icon = ExternalLinkIcon(self._open_btn)
+        open_layout.addWidget(self._open_icon)
+        self._open_btn.clicked.connect(lambda: self.openClicked.emit())
+        outer.addWidget(self._open_btn)
+
+    def _on_accent_box_pressed(self, event):
+        if self._state == "idle":
+            self._state = "running"
+            self._set_dimmed(self._accent_box, False)
+            self._progress_effect.setOpacity(1.0)
+            self._progress.setValue(0)
+            self.startClicked.emit()
+        elif self._state == "done":
+            self.reset()
+            self.resetClicked.emit()
+        # "running": ignore — button is dimmed/inert until it finishes.
+
+    def set_progress(self, pct: int):
+        self._progress.setValue(max(0, min(100, int(pct))))
+
+    def complete(self):
+        self._state = "done"
+        self._progress.setValue(100)
+        self._text_label.setText("Reset")
+        self._set_dimmed(self._accent_box, True)
+        self._open_btn.setEnabled(True)
+        self._refresh_open_icon()
+
+    def reset(self):
+        self._state = "idle"
+        self._text_label.setText("Start")
+        self._progress.setValue(0)
+        self._progress_effect.setOpacity(0.35)
+        self._open_btn.setEnabled(False)
+        self._set_dimmed(self._accent_box, True)
+        self._refresh_open_icon()
+
+    def _refresh_open_icon(self):
+        if self._palette is None:
+            return
+        self._open_icon.set_color(self._palette["ACCENT"] if self._open_btn.isEnabled() else self._palette["CARD_TEXT"])
+
+    @staticmethod
+    def _set_dimmed(widget, enabled: bool):
+        widget.setEnabled(enabled)
+        effect = widget.graphicsEffect()
+        if not isinstance(effect, QtWidgets.QGraphicsOpacityEffect):
+            effect = QtWidgets.QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+        effect.setOpacity(1.0 if enabled else 0.35)
+
+    def apply_theme(self, palette):
+        self._palette = palette
+        fg = palette["PILL_SEL_FG"]
+        self._accent_box.setStyleSheet(f"""
+            QWidget {{
+                background: {palette['ACCENT']};
+                border-radius: 4px;
+            }}
+        """)
+        self._text_label.setStyleSheet(
+            f"QLabel {{ color: {fg}; background: transparent; "
+            f"font-family: Georgia, 'Times New Roman'; font-size: 11px; font-weight: bold; }}"
+        )
+        # Blocky/segmented fill (chunk width + margin) rather than a
+        # smooth gradient, per the "blocky loading bar" ask.
+        self._progress.setStyleSheet(f"""
+            QProgressBar {{
+                background: {palette['ENTRY_BG']};
+                border: 1px solid {palette['SLIDER_BORDER']};
+                border-radius: 3px;
+            }}
+            QProgressBar::chunk {{
+                background: {palette['ACCENT']};
+                width: 6px;
+                margin: 2px;
+            }}
+        """)
+        self._open_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {palette['PILL_NOR']};
+                border: 1px solid {palette['SLIDER_BORDER']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover:enabled {{
+                background: {palette['PILL_HOV']};
+            }}
+        """)
+        self._refresh_open_icon()
+
+
 class ColormapSelector(QtWidgets.QWidget if QtWidgets is not None else object):
     """Labelled colormap dropdown, styled like the rest of this app's
     controls. Offers a different curated list of colormaps per theme (dark
@@ -1642,6 +1871,12 @@ class ColormapSelector(QtWidgets.QWidget if QtWidgets is not None else object):
         # stylesheet rendered as a stray artifact. Fusion is a
         # QSS-driven style that actually honours these rules.
         self._combo.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
+        # Bare-minimum width to fit the longest item currently in the
+        # list, rather than stretching to fill the controls column —
+        # recomputed automatically whenever set_theme_maps() swaps in
+        # the other theme's (differently-sized) colormap list.
+        self._combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        self._combo.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
         self._combo.currentTextChanged.connect(self._on_combo_changed)
         layout.addWidget(self._combo)
 
@@ -1898,7 +2133,7 @@ class ManualInfoForm(Card if QtWidgets is not None else object):
     if QtCore is not None:
         fovChanged = QtCore.pyqtSignal(object, str)  # (x, y, z) each float | None
         specResChanged = QtCore.pyqtSignal(object, str)  # value: float | None
-        quantityUnitsChanged = QtCore.pyqtSignal(str)
+        quantityUnitsChanged = QtCore.pyqtSignal(str, str)  # (quantity name, unit)
         cubeTypeChanged = QtCore.pyqtSignal(str)
 
     _CUBE_TYPES = ("PPP", "PPV", "PVP", "VPP")
@@ -1970,10 +2205,21 @@ class ManualInfoForm(Card if QtWidgets is not None else object):
         self._specres_value_edit.textChanged.connect(self._on_specres_changed)
         self._specres_unit_edit.textChanged.connect(self._on_specres_changed)
 
-        self._quantity_edit = QtWidgets.QLineEdit(self)
-        self._quantity_edit.setText("$$")
-        content.addLayout(self._inline_row(self._add_label(content, "Quantity Units:"), self._quantity_edit))
-        self._quantity_edit.textChanged.connect(lambda t: self.quantityUnitsChanged.emit(t.strip()))
+        quantity_row = QtWidgets.QHBoxLayout()
+        quantity_row.setSpacing(6)
+        self._quantity_label = QtWidgets.QLabel("Quantity:", self)
+        quantity_row.addWidget(self._quantity_label)
+        self._quantity_name_edit = QtWidgets.QLineEdit(self)
+        quantity_row.addWidget(self._quantity_name_edit, 1)
+        self._quantity_unit_label = QtWidgets.QLabel("Unit:", self)
+        quantity_row.addWidget(self._quantity_unit_label)
+        self._quantity_unit_edit = QtWidgets.QLineEdit(self)
+        self._quantity_unit_edit.setText("$$")
+        self._quantity_unit_edit.setFixedWidth(60)
+        quantity_row.addWidget(self._quantity_unit_edit)
+        content.addLayout(quantity_row)
+        self._quantity_name_edit.textChanged.connect(self._on_quantity_changed)
+        self._quantity_unit_edit.textChanged.connect(self._on_quantity_changed)
 
         self._set_specres_enabled(False)
         self._set_fov_z_enabled(True)  # default cube type is PPP
@@ -2039,6 +2285,13 @@ class ManualInfoForm(Card if QtWidgets is not None else object):
             value = None
         self.specResChanged.emit(value, unit)
 
+    def _on_quantity_changed(self):
+        name = self._quantity_name_edit.text().strip()
+        unit = self._quantity_unit_edit.text().strip()
+        if unit == "$$":
+            unit = ""
+        self.quantityUnitsChanged.emit(name, unit)
+
     def name(self) -> str:
         return self._name_edit.text().strip()
 
@@ -2047,6 +2300,13 @@ class ManualInfoForm(Card if QtWidgets is not None else object):
 
     def cube_type(self) -> str:
         return self._cube_type_selector.current_value()
+
+    def quantity_name(self) -> str:
+        return self._quantity_name_edit.text().strip()
+
+    def quantity_unit(self) -> str:
+        unit = self._quantity_unit_edit.text().strip()
+        return "" if unit == "$$" else unit
 
     def prefill(self, info: dict, extra: dict):
         """Populate every field from whatever metadata a FITS/HDF5
@@ -2082,7 +2342,7 @@ class ManualInfoForm(Card if QtWidgets is not None else object):
         if extra.get("specres_unit"):
             self._specres_unit_edit.setText(extra["specres_unit"])
         if info.get("Quantity Units"):
-            self._quantity_edit.setText(info["Quantity Units"])
+            self._quantity_unit_edit.setText(info["Quantity Units"])
 
     def reset(self, default_name: str = ""):
         """Back to blank — called each time a new numpy cube is loaded so
@@ -2101,13 +2361,15 @@ class ManualInfoForm(Card if QtWidgets is not None else object):
         self._fov_unit_edit.setText("$$")
         self._specres_value_edit.clear()
         self._specres_unit_edit.setText("$$")
-        self._quantity_edit.setText("$$")
+        self._quantity_name_edit.clear()
+        self._quantity_unit_edit.setText("$$")
 
     def apply_theme(self, palette):
         super().apply_theme(palette)
         for lbl in self._field_labels + [
             self._fov_label, self._fov_times1_label, self._fov_times2_label, self._fov_unit_label,
             self._specres_label, self._specres_unit_label,
+            self._quantity_label, self._quantity_unit_label,
         ]:
             lbl.setStyleSheet(
                 f"QLabel {{ color: {palette['CARD_TEXT']}; background: transparent; "
@@ -2130,7 +2392,8 @@ class ManualInfoForm(Card if QtWidgets is not None else object):
         for edit in (
             self._name_edit, self._telescope_edit,
             self._fov_x_edit, self._fov_y_edit, self._fov_z_edit, self._fov_unit_edit,
-            self._specres_value_edit, self._specres_unit_edit, self._quantity_edit,
+            self._specres_value_edit, self._specres_unit_edit,
+            self._quantity_name_edit, self._quantity_unit_edit,
         ):
             edit.setStyleSheet(edit_css)
         self._cube_type_selector.apply_theme(palette)
@@ -2235,6 +2498,790 @@ class DropZone(QtWidgets.QWidget if QtWidgets is not None else object):
             }}
             QPushButton:hover {{
                 background: {palette['SLIDER_BORDER']};
+            }}
+        """)
+
+
+class ProjectionWindow(QtWidgets.QMainWindow if QtWidgets is not None else object):
+    """Standalone window for a computed 2D projection / moment-0 map
+    (see CubeViewerApp._compute_projection) — a static dataset separate
+    from the live 3D volume, so it gets its own small controls column
+    (Field of view, Vmin/Vmax, Scale, Colormap, and a Grid Lines/
+    Colorbar/Scalebar aesthetics toggle row) reusing the same widget
+    classes the main viewer's own column is built from, rather than the
+    3D viewer's own state."""
+
+    def __init__(self, result, is_dark, parent=None):
+        super().__init__(parent)
+        self._image = result["image"]
+        self._raw_min = float(np.nanmin(self._image))
+        self._raw_max = float(np.nanmax(self._image))
+        if self._raw_max <= self._raw_min:
+            self._raw_max = self._raw_min + 1.0
+        self._quantity_name = result["quantity_name"]
+        self._cmap = result["cmap"]
+        self._title = result["title"]
+        # Only set for a FITS PPV cube whose header parsed as a valid
+        # celestial WCS — draws real astropy WCSAxes (sky-coordinate tick
+        # labels/axis titles) instead of the generic linear-offset axes.
+        self._wcs2d = result.get("wcs2d")
+        # The window chrome (this column, labels, etc) always matches the
+        # *actual* app theme and never changes. The plot theme below is
+        # fully independent in both directions: it never affects the main
+        # window, and — just as deliberately — a fresh window's own plot
+        # theme always starts at a fixed "Dark" rather than mirroring
+        # whatever the main theme happens to be at open time (which read
+        # as the main theme "leaking into" the plot).
+        self._is_dark = is_dark
+        self._plot_dark = True
+        self._clim = [self._raw_min, self._raw_max]
+        self._scale_mode = "Linear"
+        self._show_grid = False
+        self._show_colorbar = True
+        self._show_scalebar = True
+        self._show_ticks = True
+        self._show_axes_labels = True
+
+        # Prefilled from the main viewer's own spatial scale (voxel size)
+        # when it actually has one — left blank otherwise, per the "only
+        # if the main viewer has proper FOV and units" rule.
+        has_real_scale = result["extent_unit"] != "px"
+        self._default_spatial_res = result["px_size"] if has_real_scale else None
+        self._default_spatial_unit = result["extent_unit"] if has_real_scale else ""
+
+        self.setWindowTitle(result["title"])
+        # Extra width (over the controls column's own 300px + the plot's
+        # roughly-square area) leaves room for the colorbar's rotated
+        # label so it doesn't get clipped at the right edge.
+        self.resize(1080, 640)
+
+        central = QtWidgets.QWidget(self)
+        self.setCentralWidget(central)
+        root = QtWidgets.QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        import matplotlib
+        matplotlib.use("Qt5Agg")
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure
+
+        # Extra width over the plot's own square aspect leaves room for
+        # the colorbar's rotated label to not get clipped at the right
+        # edge of the canvas.
+        self._fig = Figure(figsize=(7, 5.5))
+        self._canvas = FigureCanvasQTAgg(self._fig)
+        root.addWidget(self._canvas, 1)
+
+        self._controls_col = QtWidgets.QWidget(self)
+        self._controls_col.setFixedWidth(300)
+        col = QtWidgets.QVBoxLayout(self._controls_col)
+        col.setContentsMargins(14, 12, 14, 12)
+        col.setSpacing(10)
+
+        self._info_card = Card(self._controls_col, faint_border=True)
+        info_content = self._info_card.layout_for_content()
+
+        res_row = QtWidgets.QHBoxLayout()
+        res_row.setSpacing(6)
+        self._res_label = QtWidgets.QLabel("Spatial resolution:", self._info_card)
+        res_row.addWidget(self._res_label)
+        self._res_value_edit = QtWidgets.QLineEdit(self._info_card)
+        self._res_value_edit.setFixedWidth(46)
+        self._res_value_edit.setValidator(QtGui.QDoubleValidator())
+        if self._default_spatial_res is not None:
+            self._res_value_edit.setText(f"{self._default_spatial_res:.4g}")
+        res_row.addWidget(self._res_value_edit)
+        self._res_unit_label = QtWidgets.QLabel("Unit:", self._info_card)
+        res_row.addWidget(self._res_unit_label)
+        self._res_unit_edit = QtWidgets.QLineEdit(self._default_spatial_unit, self._info_card)
+        self._res_unit_edit.setFixedWidth(44)
+        res_row.addWidget(self._res_unit_edit)
+        self._res_per_px_label = QtWidgets.QLabel("/ px", self._info_card)
+        res_row.addWidget(self._res_per_px_label)
+        res_row.addStretch(1)
+        info_content.addLayout(res_row)
+        self._res_value_edit.editingFinished.connect(self._on_spatial_res_changed)
+        self._res_unit_edit.editingFinished.connect(self._on_spatial_res_changed)
+
+        # Only meaningful for a moment-0 (non-PPP) projection — a PPP
+        # cube has no spectral axis to have a resolution along at all.
+        self._is_ppp = result["is_ppp"]
+        specres_value = result.get("specres_value")
+        self._default_specres_unit = result.get("specres_unit") or ""
+        if not self._is_ppp:
+            specres_row = QtWidgets.QHBoxLayout()
+            specres_row.setSpacing(6)
+            self._specres_label = QtWidgets.QLabel("Spectral resolution:", self._info_card)
+            specres_row.addWidget(self._specres_label)
+            self._specres_value_edit = QtWidgets.QLineEdit(self._info_card)
+            self._specres_value_edit.setFixedWidth(46)
+            self._specres_value_edit.setValidator(QtGui.QDoubleValidator())
+            if specres_value is not None:
+                self._specres_value_edit.setText(f"{specres_value:.4g}")
+            specres_row.addWidget(self._specres_value_edit)
+            self._specres_unit_label = QtWidgets.QLabel("Unit:", self._info_card)
+            specres_row.addWidget(self._specres_unit_label)
+            self._specres_unit_edit = QtWidgets.QLineEdit(self._default_specres_unit, self._info_card)
+            self._specres_unit_edit.setFixedWidth(44)
+            specres_row.addWidget(self._specres_unit_edit)
+            specres_row.addStretch(1)
+            info_content.addLayout(specres_row)
+            self._specres_value_edit.editingFinished.connect(self._redraw)
+            self._specres_unit_edit.editingFinished.connect(self._redraw)
+        else:
+            self._specres_label = self._specres_unit_label = None
+            self._specres_value_edit = self._specres_unit_edit = None
+
+        qty_units_row = QtWidgets.QHBoxLayout()
+        qty_units_row.setSpacing(6)
+        self._qty_units_label = QtWidgets.QLabel("Projected Quantity Unit:", self._info_card)
+        qty_units_row.addWidget(self._qty_units_label)
+        quantity_unit = result["quantity_unit"]
+        # PPP: summing along the line-of-sight multiplies by the spatial
+        # voxel size, so its natural unit is quantity x spatial unit.
+        # Moment-0: summing along the spectral axis multiplies by the
+        # spectral resolution instead — quantity x spectral unit.
+        secondary_unit = self._default_spatial_unit if self._is_ppp else self._default_specres_unit
+        default_qty_units = f"{quantity_unit} $\\times$ {secondary_unit}" if (
+            quantity_unit and secondary_unit
+        ) else ""
+        self._qty_units_edit = QtWidgets.QLineEdit(default_qty_units, self._info_card)
+        qty_units_row.addWidget(self._qty_units_edit, 1)
+        info_content.addLayout(qty_units_row)
+        self._qty_units_edit.editingFinished.connect(self._redraw)
+
+        col.addWidget(self._info_card)
+
+        col.addSpacing(4)
+        self._vmin_slider = LabeledSlider(
+            "V<sub>min</sub>", self._raw_min, self._raw_max, self._raw_min, fmt="{:.2e}", parent=self._controls_col
+        )
+        self._vmax_slider = LabeledSlider(
+            "V<sub>max</sub>", self._raw_min, self._raw_max, self._raw_max, fmt="{:.2e}", parent=self._controls_col
+        )
+        self._vmin_slider.valueChanged.connect(self._on_vmin_changed)
+        self._vmax_slider.valueChanged.connect(self._on_vmax_changed)
+        col.addWidget(self._vmin_slider)
+        col.addWidget(self._vmax_slider)
+
+        col.addSpacing(4)
+        scale_row = QtWidgets.QHBoxLayout()
+        scale_row.setSpacing(8)
+        self._scale_label = QtWidgets.QLabel("Scale:", self._controls_col)
+        scale_row.addWidget(self._scale_label)
+        self._scale_selector = PillSelector(
+            ["Linear", "Log", "Power"], selected="Linear", parent=self._controls_col, pill_height=20
+        )
+        self._scale_selector.valueChanged.connect(self._on_scale_changed)
+        scale_row.addWidget(self._scale_selector)
+        scale_row.addStretch(1)
+        col.addLayout(scale_row)
+
+        self._gamma_slider = LabeledSlider(
+            "γ", 0.1, 6.0, _DEFAULT_GAMMA, fmt="{:.2f}", parent=self._controls_col
+        )
+        self._gamma_slider.valueChanged.connect(self._on_gamma_changed)
+        self._gamma_slider.set_enabled_dimmed(False)
+        col.addWidget(self._gamma_slider)
+
+        col.addSpacing(4)
+        cmap_interp_row = QtWidgets.QHBoxLayout()
+        cmap_interp_row.setSpacing(12)
+        # Every colormap from both curated lists — unlike the main
+        # viewer, this dropdown never re-filters by theme (the plot
+        # theme dropdown deliberately leaves it untouched).
+        self._colormap_selector = ColormapSelector(self._controls_col)
+        all_maps = list(dict.fromkeys(_DARK_COLORMAPS + _LIGHT_COLORMAPS))
+        combo = self._colormap_selector._combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(all_maps)
+        if self._cmap in all_maps:
+            combo.setCurrentText(self._cmap)
+        combo.blockSignals(False)
+        self._colormap_selector._current["dark"] = combo.currentText()
+        self._colormap_selector.valueChanged.connect(self._on_cmap_changed)
+        cmap_interp_row.addWidget(self._colormap_selector)
+
+        interp_col = QtWidgets.QVBoxLayout()
+        interp_col.setSpacing(3)
+        self._interp_label = QtWidgets.QLabel("Interpolation:", self._controls_col)
+        interp_col.addWidget(self._interp_label)
+        self._interpolation = "nearest"
+        self._interp_combo = QtWidgets.QComboBox(self._controls_col)
+        self._interp_combo.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
+        self._interp_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        self._interp_combo.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
+        self._interp_combo.addItems(["nearest", "bilinear", "bicubic", "gaussian"])
+        self._interp_combo.currentTextChanged.connect(self._on_interp_changed)
+        interp_col.addWidget(self._interp_combo)
+        cmap_interp_row.addLayout(interp_col)
+
+        theme_col = QtWidgets.QVBoxLayout()
+        theme_col.setSpacing(3)
+        self._plot_theme_label = QtWidgets.QLabel("Plot theme:", self._controls_col)
+        theme_col.addWidget(self._plot_theme_label)
+        self._plot_theme_combo = QtWidgets.QComboBox(self._controls_col)
+        self._plot_theme_combo.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
+        self._plot_theme_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        self._plot_theme_combo.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Fixed)
+        self._plot_theme_combo.addItems(["Dark", "Light"])
+        self._plot_theme_combo.setCurrentText("Dark")
+        self._plot_theme_combo.currentTextChanged.connect(self._on_plot_theme_changed)
+        theme_col.addWidget(self._plot_theme_combo)
+        cmap_interp_row.addLayout(theme_col)
+
+        cmap_interp_row.addStretch(1)
+        col.addLayout(cmap_interp_row)
+
+        col.addSpacing(4)
+        fov_zoom_row = QtWidgets.QHBoxLayout()
+        fov_zoom_row.setSpacing(8)
+        self._fov_zoom_label = QtWidgets.QLabel("FOV zoom:", self._controls_col)
+        fov_zoom_row.addWidget(self._fov_zoom_label)
+
+        self._zoom = 1.0
+        self._zoom_widget = QtWidgets.QWidget(self._controls_col)
+        self._zoom_widget.setFixedHeight(22)
+        self._zoom_widget.setFixedWidth(90)
+        zoom_layout = QtWidgets.QHBoxLayout(self._zoom_widget)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(2)
+        self._zoom_minus_btn = QtWidgets.QPushButton("−", self._zoom_widget)
+        self._zoom_minus_btn.setFixedSize(20, 20)
+        self._zoom_minus_btn.clicked.connect(lambda: self._step_zoom(1 / 1.05))
+        zoom_layout.addWidget(self._zoom_minus_btn)
+        self._zoom_edit = QtWidgets.QLineEdit("100%", self._zoom_widget)
+        self._zoom_edit.setAlignment(QtCore.Qt.AlignCenter)
+        self._zoom_edit.setFixedHeight(20)
+        self._zoom_edit.editingFinished.connect(self._on_zoom_edit_committed)
+        zoom_layout.addWidget(self._zoom_edit, 1)
+        self._zoom_plus_btn = QtWidgets.QPushButton("+", self._zoom_widget)
+        self._zoom_plus_btn.setFixedSize(20, 20)
+        self._zoom_plus_btn.clicked.connect(lambda: self._step_zoom(1.05))
+        zoom_layout.addWidget(self._zoom_plus_btn)
+        fov_zoom_row.addWidget(self._zoom_widget)
+        fov_zoom_row.addStretch(1)
+        col.addLayout(fov_zoom_row)
+
+        col.addSpacing(6)
+        self._aesthetics_card = Card(self._controls_col, faint_border=True)
+        aesthetics_content = self._aesthetics_card.layout_for_content()
+        self._aesthetics_label = QtWidgets.QLabel("Visual Aesthetics", self._aesthetics_card)
+        aesthetics_content.addWidget(self._aesthetics_label)
+
+        title_row = QtWidgets.QHBoxLayout()
+        title_row.setSpacing(6)
+        self._plot_title_label = QtWidgets.QLabel("Plot Title:", self._aesthetics_card)
+        title_row.addWidget(self._plot_title_label)
+        default_title = (
+            f"2D Projection of {self._quantity_name}" if result["is_ppp"]
+            else f"Moment 0 of {self._quantity_name}"
+        )
+        self._plot_title_edit = QtWidgets.QLineEdit(default_title, self._aesthetics_card)
+        self._plot_title_edit.editingFinished.connect(self._redraw)
+        title_row.addWidget(self._plot_title_edit, 1)
+        aesthetics_content.addLayout(title_row)
+
+        self._show_title = True
+        # "Plot Title" is the first pill below (rather than a separate
+        # Yes/No row) — unchecking it both hides the title in the plot
+        # and dims the row above, matching how other gated rows in this
+        # app (e.g. the FPS field while recording) show their own
+        # disabled state.
+        self._aesthetics_toggles = ToggleGrid(
+            [
+                ("Plot Title", True),
+                ("Ticks and Labels", True),
+                ("Axes Labels", True),
+                ("Grid Lines", False),
+                ("Colorbar", True),
+                ("Scalebar", True),
+            ],
+            parent=self._aesthetics_card,
+        )
+        self._aesthetics_toggles.toggled.connect(self._on_aesthetics_toggled)
+        aesthetics_content.addWidget(self._aesthetics_toggles)
+        col.addWidget(self._aesthetics_card)
+
+        col.addSpacing(6)
+        self._export_card = Card(self._controls_col, faint_border=True)
+        export_content = self._export_card.layout_for_content()
+        self._export_label = QtWidgets.QLabel("Export", self._export_card)
+        export_content.addWidget(self._export_label)
+
+        save_row = QtWidgets.QHBoxLayout()
+        save_row.setSpacing(6)
+        self._save_frame_btn = QtWidgets.QPushButton("Save Frame", self._export_card)
+        self._save_frame_btn.setFixedHeight(28)
+        self._save_frame_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._save_frame_btn.clicked.connect(self._on_save_frame_clicked)
+        save_row.addWidget(self._save_frame_btn)
+        self._save_format_label = QtWidgets.QLabel("Format:", self._export_card)
+        save_row.addWidget(self._save_format_label)
+        self._save_format_combo = QtWidgets.QComboBox(self._export_card)
+        self._save_format_combo.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
+        self._save_format_combo.addItems(["png", "jpg", "pdf", "tiff"])
+        save_row.addWidget(self._save_format_combo)
+        save_row.addStretch(1)
+        export_content.addLayout(save_row)
+        col.addWidget(self._export_card)
+
+        col.addStretch(1)
+        root.addWidget(self._controls_col)
+
+        self._apply_window_theme()
+        self._redraw()
+
+    def _spatial_res(self):
+        try:
+            value = float(self._res_value_edit.text())
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    def _spatial_unit(self):
+        return self._res_unit_edit.text().strip() or "px"
+
+    def _on_spatial_res_changed(self):
+        self._redraw()
+
+    def _on_vmin_changed(self, value):
+        if value < self._clim[1]:
+            self._clim[0] = value
+            self._redraw()
+
+    def _on_vmax_changed(self, value):
+        if value > self._clim[0]:
+            self._clim[1] = value
+            self._redraw()
+
+    def _on_scale_changed(self, name):
+        self._scale_mode = name
+        self._gamma_slider.set_enabled_dimmed(name == "Power")
+        is_log = name == "Log"
+        self._vmin_slider.set_log_scale(is_log)
+        self._vmax_slider.set_log_scale(is_log)
+        self._redraw()
+
+    def _on_gamma_changed(self, _value):
+        if self._scale_mode == "Power":
+            self._redraw()
+
+    def _on_plot_theme_changed(self, name):
+        self._plot_dark = name == "Dark"
+        self._redraw()
+
+    def _on_cmap_changed(self, name):
+        self._cmap = name
+        self._redraw()
+
+    def _on_interp_changed(self, name):
+        self._interpolation = name
+        self._redraw()
+
+    def _on_aesthetics_toggled(self, name, checked):
+        if name == "Plot Title":
+            self._show_title = checked
+            self._set_dimmed(self._plot_title_label, checked)
+            self._set_dimmed(self._plot_title_edit, checked)
+        elif name == "Grid Lines":
+            self._show_grid = checked
+        elif name == "Colorbar":
+            self._show_colorbar = checked
+        elif name == "Scalebar":
+            self._show_scalebar = checked
+        elif name == "Ticks and Labels":
+            self._show_ticks = checked
+        elif name == "Axes Labels":
+            self._show_axes_labels = checked
+        self._redraw()
+
+    @staticmethod
+    def _set_dimmed(widget, enabled: bool):
+        widget.setEnabled(enabled)
+        effect = widget.graphicsEffect()
+        if not isinstance(effect, QtWidgets.QGraphicsOpacityEffect):
+            effect = QtWidgets.QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+        effect.setOpacity(1.0 if enabled else 0.35)
+
+    def _extent(self):
+        h, w = self._image.shape
+        if self._wcs2d is not None:
+            # WCSAxes maps pixel coordinates to sky coordinates itself —
+            # plot in plain pixel units, not a manual physical scaling.
+            return (0.0, float(w), 0.0, float(h))
+        res = self._spatial_res()
+        px = res if res is not None else 1.0
+        return (0.0, w * px, 0.0, h * px)
+
+    def _step_zoom(self, factor):
+        self._set_zoom(self._zoom * factor)
+
+    def _on_zoom_edit_committed(self):
+        text = self._zoom_edit.text().strip().rstrip("%")
+        try:
+            pct = float(text)
+        except ValueError:
+            pct = self._zoom * 100
+        self._set_zoom(pct / 100)
+
+    def _set_zoom(self, zoom):
+        self._zoom = max(0.2, min(10.0, zoom))
+        self._zoom_edit.setText(f"{self._zoom * 100:.0f}%")
+        self._redraw()
+
+    def _on_save_frame_clicked(self):
+        fmt = self._save_format_combo.currentText()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"{self._title.replace(' ', '_')}_{stamp}.{fmt}"
+        filters = {
+            "png": "PNG Image (*.png)",
+            "jpg": "JPEG Image (*.jpg *.jpeg)",
+            "pdf": "PDF Document (*.pdf)",
+            "tiff": "TIFF Image (*.tiff *.tif)",
+        }
+        dest, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Frame", str(Path.home() / default_name), filters.get(fmt, "All Files (*)")
+        )
+        if not dest:
+            return
+        if not dest.lower().endswith(f".{fmt}"):
+            dest += f".{fmt}"
+        try:
+            self._fig.savefig(dest, facecolor=self._fig.get_facecolor())
+        except Exception:
+            print(f"Failed to save frame to {dest!r}.")
+            traceback.print_exc()
+            QtWidgets.QMessageBox.warning(self, "Save Failed", f"Could not save the frame to:\n{dest}")
+
+    def _redraw(self):
+        import matplotlib
+        import matplotlib.colors as mcolors
+
+        with matplotlib.rc_context({"font.family": "serif"}):
+            self._fig.clear()
+            # Fixed margins, set *before* the axes (and, later, the
+            # divider-appended colorbar axis) are created — so both get
+            # positioned against this final layout from the start. Doing
+            # this afterwards (e.g. via tight_layout(), or subplots_adjust
+            # called post hoc) moves the main axes but leaves the already-
+            # appended colorbar axis where it was computed relative to the
+            # *old* position, which is what caused the overlapping/
+            # misplaced colorbar. Generous left margin for the Declination
+            # label, right margin sized for the colorbar + its label.
+            self._fig.subplots_adjust(left=0.17, right=0.85, bottom=0.12, top=0.90)
+            fg = "white" if self._plot_dark else "black"
+            bg = "black" if self._plot_dark else "white"
+            self._fig.set_facecolor(bg)
+            if self._wcs2d is not None:
+                ax = self._fig.add_subplot(111, projection=self._wcs2d)
+            else:
+                ax = self._fig.add_subplot(111)
+            ax.set_facecolor(bg)
+
+            extent = self._extent()
+            vmin, vmax = self._clim
+            imshow_kwargs = dict(
+                origin="lower", cmap=self._cmap, extent=extent, aspect="equal", interpolation=self._interpolation,
+            )
+            if self._scale_mode == "Log":
+                positive = self._image[self._image > 0]
+                floor = float(positive.min()) if positive.size else 1e-10
+                lo = max(vmin, floor)
+                hi = max(vmax, lo * 10)
+                norm = mcolors.LogNorm(vmin=lo, vmax=hi)
+                im = ax.imshow(self._image, norm=norm, **imshow_kwargs)
+            elif self._scale_mode == "Power":
+                norm = mcolors.PowerNorm(gamma=self._gamma_slider.value(), vmin=vmin, vmax=vmax)
+                im = ax.imshow(self._image, norm=norm, **imshow_kwargs)
+            else:
+                im = ax.imshow(self._image, vmin=vmin, vmax=vmax, **imshow_kwargs)
+
+            # Zoom crops the *view*, not the underlying data — centred on
+            # the image, at 1/zoom of the full extent. Ticks/tick-labels
+            # update for free since they derive from the axes' own limits.
+            full_w, full_h = extent[1], extent[3]
+            cx, cy = full_w / 2, full_h / 2
+            vis_w = full_w / self._zoom
+            vis_h = full_h / self._zoom
+            ax.set_xlim(cx - vis_w / 2, cx + vis_w / 2)
+            ax.set_ylim(cy - vis_h / 2, cy + vis_h / 2)
+
+            unit = self._spatial_unit()
+            tick_fontsize = 9
+            axis_label_fontsize = tick_fontsize + 3  # +1 over ticks, then +2 more per request
+            if self._show_title:
+                # A touch less pad than before — title sits slightly
+                # closer to the plot now.
+                ax.set_title(self._plot_title_edit.text(), color=fg, pad=14)
+
+            if self._wcs2d is not None:
+                # Real astropy WCSAxes — sky-projected RA/Dec ticks and
+                # axis titles rendered by astropy itself, rather than the
+                # generic linear-offset axis used everywhere else.
+                lon, lat = ax.coords[0], ax.coords[1]
+                if self._show_axes_labels:
+                    lon.set_axislabel("Right Ascension (J2000)", color=fg, fontsize=axis_label_fontsize)
+                    lat.set_axislabel("Declination (J2000)", color=fg, fontsize=axis_label_fontsize)
+                else:
+                    lon.set_axislabel("")
+                    lat.set_axislabel("")
+                if self._show_ticks:
+                    for coord in (lon, lat):
+                        coord.set_ticks_visible(True)
+                        coord.set_ticklabel_visible(True)
+                        coord.set_ticklabel(color=fg, size=tick_fontsize)
+                        coord.set_ticks(color=fg)
+                else:
+                    for coord in (lon, lat):
+                        coord.set_ticks_visible(False)
+                        coord.set_ticklabel_visible(False)
+                ax.coords.frame.set_color(fg)
+                if self._show_grid:
+                    ax.coords.grid(color=fg, alpha=0.3, linewidth=0.5)
+            else:
+                if self._show_axes_labels:
+                    ax.set_xlabel(unit, color=fg, fontsize=axis_label_fontsize, labelpad=10)
+                    ax.set_ylabel(unit, color=fg, fontsize=axis_label_fontsize, labelpad=10)
+                if self._show_ticks:
+                    # Blank tick marks on the top/right edges too (no
+                    # labels there), matching WCSAxes' own look for the
+                    # FITS/moment-0 case.
+                    ax.tick_params(
+                        colors=fg, labelsize=tick_fontsize,
+                        top=True, right=True, labeltop=False, labelright=False,
+                    )
+                else:
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                for spine in ax.spines.values():
+                    spine.set_color(fg)
+                if self._show_grid:
+                    ax.grid(True, color=fg, alpha=0.3, linewidth=0.5)
+
+            if self._show_colorbar:
+                # A genuinely separate axis, explicitly positioned to
+                # match the image axis's own height exactly (rather than
+                # mpl's default colorbar, which can end up taller than
+                # the plotted extent) — placed by hand at fixed figure
+                # coordinates matching the main axes' own fixed margins
+                # above, instead of via make_axes_locatable(), which
+                # silently mis-measures WCSAxes (it kept coming out with
+                # the *same* bbox as the main axes, overlapping it).
+                cax = self._fig.add_axes([0.87, 0.12, 0.035, 0.78])
+                cax.set_facecolor(bg)
+                cbar = self._fig.colorbar(im, cax=cax)
+                # Unit only here — unlike the main viewer's own colorbar,
+                # which bolds the quantity name above it.
+                # rotation=270 (not the default 90) reads top-to-bottom
+                # rather than bottom-to-top.
+                cbar.set_label(
+                    self._qty_units_edit.text().strip(), color=fg, fontsize=axis_label_fontsize, rotation=270,
+                    labelpad=18,
+                )
+                cbar.ax.yaxis.set_tick_params(color=fg, labelsize=tick_fontsize)
+                cbar.outline.set_edgecolor(fg)
+                for label in cbar.ax.get_yticklabels():
+                    label.set_color(fg)
+
+            if self._show_scalebar and vis_w > 0:
+                # White on a dark colormap, black on a light one — not
+                # tied to the plot theme pill, since the bar sits *on*
+                # the image itself, whose background is whatever the
+                # colormap's low end renders as.
+                sb_color = "white" if self._cmap in _DARK_COLORMAPS else "black"
+                # 25% of the currently *visible* X extent — shrinks in
+                # data units as you zoom in, so it stays ~25% of the
+                # frame on screen rather than of the full image.
+                x_hi, y_hi = cx + vis_w / 2, cy + vis_h / 2
+                bar_len = 0.25 * vis_w
+                margin_x = vis_w * 0.06
+                margin_y = vis_h * 0.06
+                x1 = x_hi - margin_x
+                x0 = x1 - bar_len
+                y0 = y_hi - margin_y
+                tick = vis_h * 0.015
+                ax.plot([x0, x1], [y0, y0], color=sb_color, linewidth=1.5, solid_capstyle="butt")
+                ax.plot([x0, x0], [y0 - tick, y0 + tick], color=sb_color, linewidth=1.5)
+                ax.plot([x1, x1], [y0 - tick, y0 + tick], color=sb_color, linewidth=1.5)
+                if self._wcs2d is not None:
+                    # bar_len is in raw pixels here (see _extent) — convert
+                    # to a real angle via the spatial-resolution field for
+                    # the label text; the bar itself still plots fine in
+                    # pixel/data coordinates either way.
+                    res = self._spatial_res()
+                    label = f"{bar_len * res:.3g} {unit}" if res is not None else f"{bar_len:.3g} px"
+                else:
+                    label = f"{bar_len:.3g} {unit}"
+                ax.text(
+                    (x0 + x1) / 2, y0 - vis_h * 0.025, label,
+                    color=sb_color, ha="center", va="top", fontsize=9, fontfamily="serif",
+                )
+
+            # No tight_layout()/subplots_adjust() call here — the fixed
+            # margins set at the top of this method (before the colorbar
+            # axis was appended) are the final layout; touching it again
+            # now would only re-introduce the same axes/colorbar
+            # misalignment that reordering this fixed.
+            self._canvas.draw_idle()
+
+    def _apply_window_theme(self):
+        # Deliberately keyed on self._is_dark (the real app theme), not
+        # self._plot_dark — this column's own chrome never follows the
+        # plot-only theme pill.
+        palette = _THEMES["dark"] if self._is_dark else _THEMES["light"]
+        self._controls_col.setStyleSheet(f"background: {palette['BG']};")
+        self.centralWidget().setStyleSheet(f"background: {palette['BG']};")
+
+        label_css = (
+            f"QLabel {{ color: {palette['CARD_TEXT']}; background: transparent; "
+            f"font-family: Georgia, 'Times New Roman'; font-size: 11px; }}"
+        )
+        for lbl in (
+            self._res_label, self._res_unit_label, self._res_per_px_label,
+            self._scale_label, self._plot_theme_label, self._interp_label,
+            self._qty_units_label, self._plot_title_label, self._fov_zoom_label,
+            self._save_format_label, self._specres_label, self._specres_unit_label,
+        ):
+            if lbl is not None:
+                lbl.setStyleSheet(label_css)
+        heading_css = (
+            f"QLabel {{ color: {palette['CARD_TEXT']}; background: transparent; "
+            f"font-family: Georgia, 'Times New Roman'; font-size: 11px; font-weight: bold; }}"
+        )
+        self._aesthetics_label.setStyleSheet(heading_css)
+        self._export_label.setStyleSheet(heading_css)
+        edit_css = f"""
+            QLineEdit {{
+                background: {palette['ENTRY_BG']};
+                color: {palette['ACCENT']};
+                border: 1px solid {palette['SLIDER_BORDER']};
+                border-radius: 4px;
+                padding: 2px 4px;
+                font-family: Georgia, 'Times New Roman';
+                font-size: 11px;
+            }}
+        """
+        for edit in (
+            self._res_value_edit, self._res_unit_edit, self._qty_units_edit, self._plot_title_edit,
+            self._specres_value_edit, self._specres_unit_edit,
+        ):
+            if edit is not None:
+                edit.setStyleSheet(edit_css)
+        self._vmin_slider.apply_theme(palette)
+        self._vmax_slider.apply_theme(palette)
+        self._scale_selector.apply_theme(palette)
+        self._gamma_slider.apply_theme(palette)
+        self._colormap_selector.apply_theme(palette)
+        self._info_card.apply_theme(palette)
+        self._aesthetics_card.apply_theme(palette)
+        self._export_card.apply_theme(palette)
+        self._aesthetics_toggles.apply_theme(palette)
+
+        # Identical to ColormapSelector's own combo (same radius, padding,
+        # font, and hand-drawn arrow glyph via its cached icon helper) so
+        # every dropdown in this window reads as one consistent control.
+        combo_css = f"""
+            QComboBox {{
+                background: {palette['ENTRY_BG']};
+                color: {palette['ACCENT']};
+                border: 1px solid {palette['SLIDER_BORDER']};
+                border-radius: 7px;
+                padding: 5px 10px;
+                font-family: Georgia, 'Times New Roman';
+                font-size: 11px;
+            }}
+            QComboBox:hover {{
+                border: 1px solid {palette['ACCENT']};
+            }}
+            QComboBox:focus {{
+                border: 1px solid {palette['SLIDER_THUMBHOV']};
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 24px;
+                border: none;
+                background: transparent;
+            }}
+            QComboBox::down-arrow {{
+                image: url({self._colormap_selector._arrow_icon_path(palette['ACCENT'])});
+                width: 10px;
+                height: 10px;
+                margin-right: 4px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: {palette['ENTRY_BG']};
+                color: {palette['ACCENT']};
+                border: 1px solid {palette['SLIDER_BORDER']};
+                border-radius: 7px;
+                padding: 4px;
+                outline: none;
+                selection-background-color: {palette['ACCENT']};
+                selection-color: {palette['PILL_SEL_FG']};
+            }}
+            QComboBox QAbstractItemView::item {{
+                min-height: 22px;
+                padding: 2px 6px;
+                border-radius: 4px;
+            }}
+        """
+        self._interp_combo.setStyleSheet(combo_css)
+        self._plot_theme_combo.setStyleSheet(combo_css)
+        self._save_format_combo.setStyleSheet(combo_css)
+        # Restyling shouldn't touch the selection, but re-assert it
+        # explicitly (signals blocked) so this combo can never silently
+        # drift away from self._plot_dark, whatever the cause.
+        self._plot_theme_combo.blockSignals(True)
+        self._plot_theme_combo.setCurrentText("Dark" if self._plot_dark else "Light")
+        self._plot_theme_combo.blockSignals(False)
+
+        zoom_btn_css = f"""
+            QPushButton {{
+                background: {palette['PILL_NOR']};
+                color: {palette['CARD_TEXT']};
+                border: none;
+                border-radius: 2px;
+                font-family: Georgia, 'Times New Roman';
+                font-size: 11px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: {palette['PILL_HOV']};
+            }}
+        """
+        self._zoom_minus_btn.setStyleSheet(zoom_btn_css)
+        self._zoom_plus_btn.setStyleSheet(zoom_btn_css)
+        self._zoom_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background: {palette['ENTRY_BG']};
+                color: {palette['CARD_TEXT']};
+                border: none;
+                border-radius: 2px;
+                font-family: Georgia, 'Times New Roman';
+                font-size: 10px;
+                font-weight: bold;
+            }}
+        """)
+
+        # Exact match to StaticFrameControl's own "Save .<ext>" button in
+        # the main window — same palette roles, radius, padding, weight.
+        self._save_frame_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {palette['PILL_NOR']};
+                color: {palette['ACCENT']};
+                border: none;
+                border-radius: 4px;
+                padding: 0 10px;
+                font-family: Georgia, 'Times New Roman';
+                font-size: 11px;
+                font-weight: bold;
+            }}
+            QPushButton:hover:enabled {{
+                background: {palette['PILL_HOV']};
             }}
         """)
 
@@ -2357,18 +3404,25 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         scale_row.addWidget(self.gamma_slider, 1)
         controls_layout.addLayout(scale_row)
 
+        cmap_snap_row = QtWidgets.QHBoxLayout()
+        cmap_snap_row.setSpacing(16)
+
         self.colormap_selector = ColormapSelector(self._controls_col)
         self.colormap_selector.valueChanged.connect(self._on_cmap_changed)
-        controls_layout.addWidget(self.colormap_selector)
+        cmap_snap_row.addWidget(self.colormap_selector)
 
+        snap_col = QtWidgets.QVBoxLayout()
+        snap_col.setSpacing(3)
         self.axis_snap_label = QtWidgets.QLabel("Snap to axis", self._controls_col)
-        controls_layout.addWidget(self.axis_snap_label)
-
+        snap_col.addWidget(self.axis_snap_label)
         self.axis_snap_selector = PillSelector(
-            ["Free", "X-Y", "Y-Z", "X-Z"], selected="Free", parent=self._controls_col, pill_height=20
+            ["Free", "X-Y", "Y-Z", "X-Z"], selected="Free", parent=self._controls_col,
+            pill_height=20, pill_padding="2px 6px", expand=True,
         )
         self.axis_snap_selector.valueChanged.connect(self._on_axis_snap_changed)
-        controls_layout.addWidget(self.axis_snap_selector)
+        snap_col.addWidget(self.axis_snap_selector)
+        cmap_snap_row.addLayout(snap_col, 1)
+        controls_layout.addLayout(cmap_snap_row)
 
         controls_layout.addSpacing(6)
         self.aesthetics_card = Card(self._controls_col, faint_border=True)
@@ -2445,6 +3499,27 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         export_content.addWidget(self.static_frame_control)
         controls_layout.addWidget(self.export_card)
         self._captured_frame = None
+
+        controls_layout.addSpacing(6)
+        self.projection_card = Card(self._controls_col, faint_border=True)
+        projection_content = self.projection_card.layout_for_content()
+        self.projection_label = QtWidgets.QLabel("2D Projection (along current line-of-sight)", self.projection_card)
+        self.projection_label.setWordWrap(True)
+        projection_content.addWidget(self.projection_label)
+
+        self.projection_control = ProjectionControl(self.projection_card)
+        self.projection_control.startClicked.connect(self._on_projection_start_clicked)
+        self.projection_control.openClicked.connect(self._on_projection_open_clicked)
+        self.projection_control.resetClicked.connect(self._on_projection_reset_clicked)
+        projection_content.addWidget(self.projection_control)
+        controls_layout.addWidget(self.projection_card)
+
+        self._projection_result = None
+        self._projection_window = None
+        self._projection_progress_timer = QtCore.QTimer(self)
+        self._projection_progress_timer.setInterval(60)
+        self._projection_progress_timer.timeout.connect(self._on_projection_progress_tick)
+        self._projection_progress_step = 0
 
         # Recording only makes sense while the cube is actually moving,
         # and a "static" frame only makes sense while it's actually
@@ -2560,6 +3635,10 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self.record_control.reset_idle()
         self._captured_frame = None
         self.static_frame_control.reset()
+        self._projection_progress_timer.stop()
+        self._projection_result = None
+        self._close_projection_window()
+        self.projection_control.reset()
 
         if self.plotter is not None:
             self.viewport.clear_child()
@@ -2582,6 +3661,12 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
             axis_tick_formatters=extra.get("axis_tick_formatters"),
             axis_tick_units=extra.get("axis_tick_units"),
         )
+        # Not a constructor param — just stashed for the 2D Projection /
+        # Moment 0 window (see _compute_projection) to pick up when it's
+        # actually a FITS PPV cube with real sky coordinates. None for
+        # everything else (HDF5, numpy, or a FITS file whose header
+        # didn't parse as a valid celestial WCS).
+        self.viewer.wcs2d = extra.get("wcs2d")
         self.viewer.set_theme(self._is_dark)
         is_log = self.scale_selector.current_value() == "Log"
         self.vmin_slider.set_log_scale(is_log)
@@ -2637,6 +3722,7 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self.manual_info_form.reset(default_name=cube_path.stem)
         self.manual_info_form.prefill(info, extra)
         self.manual_info_form.apply_theme(theme_palette)
+        self._update_projection_label()
 
         self._stack.setCurrentWidget(self._loaded_page)
 
@@ -2826,10 +3912,20 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
 
     def _on_manual_cube_type_changed(self, _value):
         self._on_manual_specres_changed()
+        self._update_projection_label()
+        self._projection_result = None
+        self._close_projection_window()
+        self.projection_control.reset()
 
-    def _on_manual_quantity_units_changed(self, text):
+    def _update_projection_label(self):
+        is_ppp = self.manual_info_form.cube_type() == "PPP"
+        self.projection_label.setText(
+            "2D Projection (along current line-of-sight)" if is_ppp else "Moment 0 along spectral axis"
+        )
+
+    def _on_manual_quantity_units_changed(self, name, unit):
         if self.viewer is not None:
-            self.viewer.set_colorbar_title(text)
+            self.viewer.set_colorbar_title(_compose_colorbar_title(name, unit))
 
     def _on_cube_outline_toggled(self, state):
         if self.viewer is not None:
@@ -2941,6 +4037,256 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
             print(f"Failed to save frame to {dest!r}.")
             traceback.print_exc()
             QtWidgets.QMessageBox.warning(self, "Save Failed", f"Could not save the frame to:\n{dest}")
+
+    # ---------------------------
+    # 2D Projection / Moment 0
+    # ---------------------------
+
+    def _on_projection_start_clicked(self):
+        if self.viewer is None:
+            self.projection_control.reset()
+            return
+        self._projection_progress_step = 0
+        self._projection_progress_timer.start()
+
+    def _on_projection_progress_tick(self):
+        # A staged fill rather than real per-voxel progress — the
+        # underlying computation (a numpy sum, or for PPP a single
+        # scipy affine_transform call) isn't naturally choppable into
+        # observable steps, so this just gives the "being made" motion
+        # the UI asks for before the actual (usually sub-second) compute
+        # runs on the last tick.
+        self._projection_progress_step += 1
+        pct = min(90, self._projection_progress_step * 9)
+        self.projection_control.set_progress(pct)
+        if pct >= 90:
+            self._projection_progress_timer.stop()
+            QtCore.QTimer.singleShot(0, self._run_projection_compute)
+
+    def _run_projection_compute(self):
+        try:
+            result = self._compute_projection()
+        except Exception:
+            print("Failed to compute the projection.")
+            traceback.print_exc()
+            QtWidgets.QMessageBox.warning(
+                self, "Projection Failed", "Could not compute the 2D projection — see the console for details."
+            )
+            self.projection_control.reset()
+            return
+        self._projection_result = result
+        self.projection_control.set_progress(100)
+        self.projection_control.complete()
+
+    def _on_projection_reset_clicked(self):
+        self._projection_result = None
+        self._close_projection_window()
+
+    def _on_projection_open_clicked(self):
+        if self._projection_window is not None:
+            # Already open (or just closed with its window-with-widgets
+            # object still alive) — bring it forward with whatever edits
+            # are already sitting in it, rather than starting fresh.
+            self._projection_window.show()
+            self._projection_window.raise_()
+            self._projection_window.activateWindow()
+            return
+        if self._projection_result is None:
+            return
+        self._show_projection_window(self._projection_result)
+
+    def _close_projection_window(self):
+        if self._projection_window is not None:
+            self._projection_window.close()
+            self._projection_window.deleteLater()
+            self._projection_window = None
+
+    def _compute_projection(self):
+        """Returns a dict describing the projected 2D image, consumed by
+        _show_projection_window(). Kept cube-type-agnostic at the call
+        site: PPP goes through an actual 3D rotation to the current
+        camera orientation (see _project_along_view); anything else is
+        a plain sum along its known spectral axis (a real moment-0)."""
+        viewer = self.viewer
+        cube_type = self.manual_info_form.cube_type()
+        spatial_scale = viewer.spatial_scale  # (value_per_voxel, unit) | None
+        quantity_name = self.manual_info_form.quantity_name() or "Intensity"
+        quantity_unit = self.manual_info_form.quantity_unit()
+
+        wcs2d = None
+        specres_display_value = None
+        specres_unit = ""
+        if cube_type == "PPP":
+            image = self._project_along_view(viewer.cube)
+            if spatial_scale is not None:
+                voxel_size, unit = spatial_scale
+                image = image * voxel_size
+                extent_unit = unit
+                px_size = voxel_size
+            else:
+                extent_unit = "px"
+                px_size = 1.0
+            x_label, y_label = "Projected offset", "Projected offset"
+        else:
+            # Grid axes are (X, Y, Z) in that order; numpy's cube array is
+            # stored (Z, Y, X) — see KinematicVolumeViewer.__init__. The
+            # cube-type string ("PPV"/"PVP"/"VPP") gives the spectral
+            # axis's position in the *grid* (X,Y,Z) ordering.
+            spec_grid_axis = cube_type.index("V")
+            grid_to_numpy = {0: 2, 1: 1, 2: 0}
+            spec_numpy_axis = grid_to_numpy[spec_grid_axis]
+
+            specres_text = self.manual_info_form._specres_value_edit.text().strip()
+            specres_unit = self.manual_info_form._specres_unit_edit.text().strip()
+            if specres_unit == "$$":
+                specres_unit = ""
+            try:
+                specres_value = float(specres_text)
+            except ValueError:
+                specres_value = 1.0  # fallback used only for the sum below
+                specres_unit = specres_unit or ""
+            # What the popup's own Spectral Resolution field prefills
+            # with — None (left blank) rather than the 1.0 fallback above
+            # when the main form's own field was never actually filled in.
+            specres_display_value = float(specres_text) if specres_text else None
+
+            summed = np.sum(viewer.cube, axis=spec_numpy_axis) * specres_value
+
+            remaining_numpy_axes = [ax for ax in range(3) if ax != spec_numpy_axis]
+            numpy_to_grid = {2: 0, 1: 1, 0: 2}
+            remaining_grid_axes = [numpy_to_grid[ax] for ax in remaining_numpy_axes]
+            horiz_grid_axis, vert_grid_axis = sorted(remaining_grid_axes)
+            pos_horiz = remaining_grid_axes.index(horiz_grid_axis)
+            pos_vert = remaining_grid_axes.index(vert_grid_axis)
+            image = np.moveaxis(summed, [pos_vert, pos_horiz], [0, 1])
+
+            x_label = viewer.axis_labels[horiz_grid_axis] if horiz_grid_axis < len(viewer.axis_labels) else "X"
+            y_label = viewer.axis_labels[vert_grid_axis] if vert_grid_axis < len(viewer.axis_labels) else "Y"
+            if spatial_scale is not None:
+                px_size, extent_unit = spatial_scale
+            else:
+                px_size, extent_unit = 1.0, "px"
+
+            # A FITS PPV cube's X/Y are exactly the WCS's own (RA, Dec)
+            # pixel axes — pos_horiz/pos_vert reduce to (0, 1) whenever
+            # the spectral axis is Z, which a FITS-loaded cube always is
+            # (see _load_fits_cube_with_metadata). No axis permutation to
+            # account for, only the crop/pad pixel-origin shift below.
+            if cube_type == "PPV" and getattr(viewer, "wcs2d", None) is not None:
+                wcs2d = viewer.wcs2d
+
+        # Crop to the actual signal — the PPP rotation pads with empty
+        # (zero) voxels to fit the rotated cube without clipping it;
+        # cropping that padding back out is what makes the final image
+        # "cover all the signal" without a border of dead space.
+        image = np.asarray(image, dtype=np.float64)
+        threshold = np.abs(image).max() * 1e-6
+        mask = np.abs(image) > threshold
+        row0 = col0 = 0
+        if mask.any():
+            rows = np.where(mask.any(axis=1))[0]
+            cols = np.where(mask.any(axis=0))[0]
+            row0, col0 = int(rows.min()), int(cols.min())
+            image = image[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+
+        # Pad the shorter side symmetrically (with zeros) rather than
+        # stretching — keeps pixels physically square (px_size applies
+        # equally to both axes) while making the array itself square.
+        h, w = image.shape
+        pad_top = pad_left = 0
+        if h != w:
+            side = max(h, w)
+            pad_top = (side - h) // 2
+            pad_bottom = side - h - pad_top
+            pad_left = (side - w) // 2
+            pad_right = side - w - pad_left
+            image = np.pad(image, ((pad_top, pad_bottom), (pad_left, pad_right)))
+
+        if wcs2d is not None:
+            # The crop moved pixel (col0, row0) to (0, 0), and the pad
+            # then shifted that again by (pad_left, pad_top) — net shift
+            # applied to CRPIX (1-indexed, so pixel *count* offsets add
+            # directly) so RA/Dec ticks still land on the right sky
+            # position for this cropped-and-padded array.
+            wcs2d = wcs2d.deepcopy()
+            wcs2d.wcs.crpix[0] -= (col0 - pad_left)
+            wcs2d.wcs.crpix[1] -= (row0 - pad_top)
+
+        width = image.shape[1] * px_size
+        height = image.shape[0] * px_size
+        return {
+            "image": image,
+            "extent": (0.0, width, 0.0, height),
+            "x_label": x_label,
+            "y_label": y_label,
+            "extent_unit": extent_unit,
+            "px_size": px_size,
+            "quantity_name": quantity_name,
+            "quantity_unit": quantity_unit,
+            "specres_value": specres_display_value,
+            "specres_unit": specres_unit,
+            "is_ppp": cube_type == "PPP",
+            "cmap": viewer.cmap,
+            "wcs2d": wcs2d,
+            "title": f"{self.manual_info_form.name() or 'Cube'} — "
+                     f"{'2D Projection' if cube_type == 'PPP' else 'Moment 0'}",
+        }
+
+    def _project_along_view(self, cube):
+        """Rotate `cube` (numpy shape (nz,ny,nx), i.e. world axes (Z,Y,X))
+        to align the *current camera's* line-of-sight with a depth axis,
+        then sum along that axis — a real projection of however the
+        volume is currently oriented on screen, not just an axis-aligned
+        sum. Assumes isotropic voxel spacing (true for a genuine PPP
+        cube, where nx == ny == nz), since the camera's view/up/right
+        vectors live in the same world coordinates as the raw voxel
+        indices only when spacing is uniform."""
+        from scipy.ndimage import affine_transform
+
+        camera = self.plotter.renderer.GetActiveCamera()
+        look = -np.array(camera.GetViewPlaneNormal(), dtype=np.float64)
+        look /= np.linalg.norm(look)
+        up = np.array(camera.GetViewUp(), dtype=np.float64)
+        up = up - np.dot(up, look) * look
+        up /= np.linalg.norm(up)
+        right = np.cross(look, up)
+        right /= np.linalg.norm(right)
+
+        # World axes (X,Y,Z) correspond to numpy axes (2,1,0) — reorder
+        # into a plain (X,Y,Z)-indexed array so the basis vectors above
+        # apply directly to array indices.
+        arr = np.transpose(cube, (2, 1, 0)).astype(np.float64)
+
+        matrix = np.column_stack([right, up, look])
+        diag = int(np.ceil(np.linalg.norm(arr.shape)))
+        out_shape = (diag, diag, diag)
+        center_in = (np.array(arr.shape) - 1) / 2.0
+        center_out = (np.array(out_shape) - 1) / 2.0
+        offset = center_in - matrix @ center_out
+
+        rotated = affine_transform(
+            arr, matrix, offset=offset, output_shape=out_shape, order=1, cval=0.0
+        )
+        projected = rotated.sum(axis=2)  # sum along the depth ("look") axis
+        return projected.T  # rows = up (vertical), cols = right (horizontal)
+
+    def _show_projection_window(self, result):
+        window = ProjectionWindow(result, self._is_dark, parent=self)
+        window.show()
+        # The very first theme/style pass happens before the window has
+        # ever been on screen — like CubeViewerApp's own first paint (see
+        # _finalize_cube_view), a stylesheet applied pre-show can render
+        # wrong (here: the aesthetics pill grid overlapping itself) until
+        # something re-applies it post-show. Two passes to fully converge,
+        # same as there.
+        QtCore.QTimer.singleShot(0, window._apply_window_theme)
+        QtCore.QTimer.singleShot(0, window._apply_window_theme)
+        # Keep a reference — otherwise Qt garbage-collects the window the
+        # moment this method returns and it vanishes instantly. Also lets
+        # a later "open" click just re-show/raise this same window (with
+        # whatever edits are already in it) instead of rebuilding one —
+        # see _on_projection_open_clicked/_close_projection_window.
+        self._projection_window = window
 
     def _on_animation_tick(self):
         if self.viewer is None or self.plotter is None:
@@ -3213,6 +4559,10 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self.record_control.reset_idle()
         self._captured_frame = None
         self.static_frame_control.reset()
+        self._projection_progress_timer.stop()
+        self._projection_result = None
+        self._close_projection_window()
+        self.projection_control.reset()
 
         if self.plotter is not None:
             self.viewport.clear_child()
@@ -3286,12 +4636,27 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self.export_label.setStyleSheet(heading_css)
         self.record_control.apply_theme(palette)
         self.static_frame_control.apply_theme(palette)
+        self.projection_card.apply_theme(palette)
+        self.projection_label.setStyleSheet(heading_css)
+        self.projection_control.apply_theme(palette)
         self.theme_button.apply_theme(palette, self._is_dark)
         self.reset_button.apply_theme(palette)
         self.docs_button.apply_theme(palette)
         self.github_button.apply_theme(palette)
         self._update_rec_indicator_theme()
         _set_titlebar_theme(self, self._is_dark)
+
+        # The projection popup's own chrome tracks the real app theme
+        # live, same as everything else on this page. Its plot theme is
+        # independently controllable the rest of the time, but a main
+        # theme *change* while a projection exists (open, or just closed
+        # without being reset) snaps the plot theme to match too — via
+        # the combo's own change handler, so it fires exactly like the
+        # user picking it themselves would.
+        if self._projection_window is not None:
+            self._projection_window._is_dark = self._is_dark
+            self._projection_window._plot_theme_combo.setCurrentText("Dark" if self._is_dark else "Light")
+            self._projection_window._apply_window_theme()
 
     def closeEvent(self, event):
         self._record_frame_timer.stop()
@@ -3345,6 +4710,18 @@ def main(argv: list[str] | None = None) -> int:
     if icon_path.exists():
         window.setWindowIcon(icon)
     window.show()
+    # show() makes the window visible at whatever geometry/stylesheet
+    # state its children have *right now* — both only actually settle
+    # once the event loop gets a turn or two, which is why the column
+    # can briefly flash as a cluster of unlaid-out/unstyled widgets
+    # before snapping into its real layout (the same class of "first
+    # paint" issue _finalize_cube_view works around post-cube-load, just
+    # not yet worked around for the drop-zone page shown at launch).
+    # Forcing those passes here, before control returns to the user,
+    # means the very first visible frame is already the settled one.
+    QtWidgets.QApplication.processEvents()
+    window._apply_theme()
+    QtWidgets.QApplication.processEvents()
     if args.cube_path is not None:
         # Deferred to the next event-loop tick, same as browse_for_cube —
         # loading a cube immediately, before the freshly-shown window has

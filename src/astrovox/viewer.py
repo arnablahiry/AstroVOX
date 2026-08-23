@@ -16,7 +16,7 @@ _MATHTEXT_CACHE: dict = {}
 _MATHTEXT_DPI = 200
 
 
-def _render_mathtext_rgba(text: str, color=(1.0, 1.0, 1.0), fontsize: int = 18):
+def _render_mathtext_rgba(text: str, color=(1.0, 1.0, 1.0), fontsize: int = 18, fontweight: str = "bold"):
     """Rasterize `text` (matplotlib mathtext — a LaTeX-like subset:
     subscripts/superscripts, Greek letters, \\odot, fractions, etc., not
     a full LaTeX engine) to an (H, W, 4) uint8 RGBA array on a
@@ -28,7 +28,7 @@ def _render_mathtext_rgba(text: str, color=(1.0, 1.0, 1.0), fontsize: int = 18):
     parser handles that mixed mode natively. Results are cached since
     rendering is comparatively expensive and the same label text is
     often re-requested (e.g. on every theme toggle)."""
-    key = (text, tuple(color), fontsize)
+    key = (text, tuple(color), fontsize, fontweight)
     cached = _MATHTEXT_CACHE.get(key)
     if cached is not None:
         return cached
@@ -48,7 +48,7 @@ def _render_mathtext_rgba(text: str, color=(1.0, 1.0, 1.0), fontsize: int = 18):
         # counterpart of the plain-text default so both halves of mixed
         # text match.
         with matplotlib.rc_context({"mathtext.fontset": "dejavuserif"}):
-            fig.text(0.5, 0.5, s, color=color, fontsize=fontsize, fontweight="bold", fontfamily="serif", ha="center", va="center")
+            fig.text(0.5, 0.5, s, color=color, fontsize=fontsize, fontweight=fontweight, fontfamily="serif", ha="center", va="center")
             buf = io.BytesIO()
             try:
                 fig.savefig(buf, format="png", dpi=_MATHTEXT_DPI, transparent=True, bbox_inches="tight", pad_inches=0.02)
@@ -1060,7 +1060,11 @@ class KinematicVolumeViewer:
         from vtkmodules.vtkRenderingCore import vtkActor2D, vtkImageMapper
         from vtkmodules.util import numpy_support
 
-        rgba = _render_mathtext_rgba(text, color=color_rgb, fontsize=font_size)
+        # "normal" base weight, not the usual bold default — the colorbar
+        # title text itself now carries an explicit \mathbf{...} span
+        # around just the quantity name (see CubeViewerApp's colorbar
+        # title composition), with the unit suffix meant to read regular.
+        rgba = _render_mathtext_rgba(text, color=color_rgb, fontsize=font_size, fontweight="normal")
         h, w = rgba.shape[:2]
 
         image = vtkImageData()
@@ -1463,8 +1467,12 @@ class KinematicVolumeViewer:
             self._colorbar_title_actor = None
 
         if self.colorbar_title.strip():
+            # The title is now name + unit on two lines (see
+            # CubeViewerApp._compose_colorbar_title) — the anchor is
+            # nudged to keep the *bottom* line's gap above the
+            # tick-label row reading the same as it did with one line.
             self._colorbar_title_actor = self._build_mathtext_actor2d(
-                self.colorbar_title, self._theme_rgb(), self._label_font_size - 2, cb_x + cb_w / 2, cb_y + cb_h - 0.008
+                self.colorbar_title, self._theme_rgb(), self._label_font_size - 3, cb_x + cb_w / 2, cb_y + cb_h - 0.002
             )
             self.plotter.renderer.AddActor2D(self._colorbar_title_actor)
 
@@ -1832,6 +1840,12 @@ def _load_fits_cube_with_metadata(cube_path: Path):
             "axis_label_formats": ("%.2f", "%.2f", "%.1f"),
             "axis_tick_formatters": (None, None, None),
             "axis_tick_units": (("h", "m", "s"), ("°", "'", '"'), None),
+            # The cube's own 2D celestial WCS (RA/Dec), when it parsed
+            # successfully — used by the 2D Projection / Moment 0 window
+            # to render real astropy WCSAxes (proper sky tick labels)
+            # instead of a generic linear-offset axis. See
+            # CubeViewerApp._compute_projection.
+            "wcs2d": wcs2d,
         }
         if naxis1 and cdelt1:
             extra["spatial_scale"] = (abs(float(cdelt1)) * 3600, "arcsec")

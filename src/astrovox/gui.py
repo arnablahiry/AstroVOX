@@ -8,6 +8,7 @@ import signal
 import tempfile
 import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -1094,7 +1095,7 @@ class RecordControl(QtWidgets.QWidget if QtWidgets is not None else object):
         self._state = "idle"  # idle | countdown | recording | stopped
         self._gate_enabled = True
         self._countdown_value = 0
-        self._fps = 20
+        self._fps = 30
         self._fps_min, self._fps_max = 1, 60
 
         outer = QtWidgets.QHBoxLayout(self)
@@ -1416,7 +1417,7 @@ class StaticFrameControl(QtWidgets.QWidget if QtWidgets is not None else object)
         self._icon.setFixedSize(20, 20)
         self._icon.setAlignment(QtCore.Qt.AlignCenter)
 
-        self._text_label = QtWidgets.QLabel("Save Static Frame", self._accent_box)
+        self._text_label = QtWidgets.QLabel("Capture Static Frame", self._accent_box)
 
         self._box_row.addStretch(1)
         self._box_row.addWidget(self._icon)
@@ -1477,7 +1478,7 @@ class StaticFrameControl(QtWidgets.QWidget if QtWidgets is not None else object)
         self._set_dimmed(self._format_label, gate and self._state == "idle")
         if self._state == "idle":
             self._icon.show()
-            self._text_label.setText("Save Static Frame")
+            self._text_label.setText("Capture Static Frame")
             self._save_btn.hide()
         else:  # "captured"
             self._icon.hide()
@@ -2281,6 +2282,44 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self.viewport = SquareViewportContainer(self._loaded_page)
         root_layout.addWidget(self.viewport, 1)
 
+        # Recording indicator: blinking red dot + "REC" + elapsed mm:ss,
+        # bottom-right of the viewport, shown only while actually
+        # recording (see _start_rec_indicator/_stop_rec_indicator). A
+        # plain Qt widget drawn on top of (not inside) the VTK render
+        # window, like the capture flash — it doesn't leak into
+        # write_frame()'s captured video pixels for the same reason.
+        # Colours are theme-dependent (see _update_rec_indicator_theme).
+        self._rec_indicator = QtWidgets.QWidget(self.viewport)
+        self._rec_indicator.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        self._rec_indicator.setStyleSheet("background: transparent;")
+        self._rec_indicator.hide()
+        rec_layout = QtWidgets.QVBoxLayout(self._rec_indicator)
+        rec_layout.setContentsMargins(0, 0, 0, 0)
+        rec_layout.setSpacing(2)
+
+        rec_row = QtWidgets.QHBoxLayout()
+        rec_row.setContentsMargins(0, 0, 0, 0)
+        rec_row.setSpacing(4)
+        self._rec_dot = QtWidgets.QLabel(self._rec_indicator)
+        self._rec_dot.setFixedSize(12, 12)
+        rec_row.addWidget(self._rec_dot)
+        self._rec_label = QtWidgets.QLabel("REC", self._rec_indicator)
+        rec_row.addWidget(self._rec_label)
+        rec_layout.addLayout(rec_row)
+
+        self._rec_time_label = QtWidgets.QLabel("00:00", self._rec_indicator)
+        rec_layout.addWidget(self._rec_time_label)
+
+        self._rec_dot_on = True
+        self._rec_blink_timer = QtCore.QTimer(self)
+        self._rec_blink_timer.setInterval(400)
+        self._rec_blink_timer.timeout.connect(self._toggle_rec_dot)
+
+        self._rec_start_time = None
+        self._rec_elapsed_timer = QtCore.QTimer(self)
+        self._rec_elapsed_timer.setInterval(1000)
+        self._rec_elapsed_timer.timeout.connect(self._update_rec_elapsed)
+
         self._controls_col = QtWidgets.QWidget(self._loaded_page)
         self._controls_col.setFixedWidth(controls_col_width)
         controls_layout = QtWidgets.QVBoxLayout(self._controls_col)
@@ -2511,6 +2550,7 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         # writer, so cut it loose (discarding the unsaved clip) rather than
         # risk it erroring on the next frame tick.
         self._record_frame_timer.stop()
+        self._stop_rec_indicator()
         if self._record_tmp_path and Path(self._record_tmp_path).exists():
             try:
                 os.remove(self._record_tmp_path)
@@ -2839,6 +2879,30 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
             print("Failed to capture the current frame.")
             traceback.print_exc()
             self._captured_frame = None
+            return
+        self._flash_viewport()
+
+    def _flash_viewport(self):
+        """Camera-shutter flash over the viewport on capture — a plain
+        white overlay widget, on screen just long enough to read as a
+        flash, then torn down. Drawn as a Qt widget on top of (not
+        inside) the VTK render window, so it never leaks into the
+        screenshot pixel data taken just before this runs."""
+        flash = QtWidgets.QWidget(self.viewport)
+        flash.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        flash.setStyleSheet("background: rgba(255, 255, 255, 0.35);")
+        flash.setGeometry(self.viewport.rect())
+        flash.show()
+        flash.raise_()
+        QtCore.QTimer.singleShot(150, flash.deleteLater)
+
+    def _default_export_name(self, kind: str) -> str:
+        """e.g. "IC5179_recording_20260823_143012" — falls back to
+        "cube" when the Name field is blank (e.g. an unfilled numpy
+        cube)."""
+        name = self.manual_info_form.name() or "cube"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"{name}_{kind}_{stamp}"
 
     def _on_static_reset_clicked(self):
         self._captured_frame = None
@@ -2856,7 +2920,10 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
             "tiff": "TIFF Image (*.tiff *.tif)",
         }
         dest, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Frame", str(Path.home() / f"frame.{fmt}"), filters.get(fmt, "All Files (*)")
+            self,
+            "Save Frame",
+            str(Path.home() / f"{self._default_export_name('capture')}.{fmt}"),
+            filters.get(fmt, "All Files (*)"),
         )
         if not dest:
             return
@@ -2901,6 +2968,76 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
     # ---------------------------
     # Recording
     # ---------------------------
+
+    def _rec_colors(self):
+        """(red, time-text colour) for the current theme — a lighter red
+        reads clearly against the dark viewport, a darker red against
+        the light one; the elapsed-time text follows the same logic."""
+        if self._is_dark:
+            return "#ff6b6b", "white"
+        return "#a30000", "black"
+
+    def _update_rec_indicator_theme(self):
+        red, time_color = self._rec_colors()
+        self._rec_label.setStyleSheet(
+            f"color: {red}; font-family: 'Courier New', monospace; font-size: 15px; "
+            "font-weight: bold; background: transparent;"
+        )
+        self._rec_time_label.setStyleSheet(
+            f"color: {time_color}; font-family: 'Courier New', monospace; font-size: 15px; background: transparent;"
+        )
+        self._rec_dot.setStyleSheet(
+            f"background: {red if self._rec_dot_on else 'transparent'}; border-radius: 6px;"
+        )
+
+    def _toggle_rec_dot(self):
+        self._rec_dot_on = not self._rec_dot_on
+        red, _ = self._rec_colors()
+        color = red if self._rec_dot_on else "transparent"
+        self._rec_dot.setStyleSheet(f"background: {color}; border-radius: 6px;")
+
+    def _update_rec_elapsed(self):
+        if self._rec_start_time is None:
+            return
+        elapsed = int(time.monotonic() - self._rec_start_time)
+        mins, secs = divmod(elapsed, 60)
+        self._rec_time_label.setText(f"{mins:02d}:{secs:02d}")
+
+    def _start_rec_indicator(self):
+        self._rec_start_time = time.monotonic()
+        self._rec_dot_on = True
+        self._update_rec_indicator_theme()
+        self._rec_time_label.setText("00:00")
+        self._rec_indicator.adjustSize()
+        margin = 12
+        self._rec_indicator.move(
+            self.viewport.width() - self._rec_indicator.width() - margin,
+            self.viewport.height() - self._rec_indicator.height() - margin,
+        )
+        self._rec_indicator.show()
+        self._rec_indicator.raise_()
+        self._rec_blink_timer.start()
+        self._rec_elapsed_timer.start()
+        self._set_theme_button_enabled(False)
+
+    def _stop_rec_indicator(self):
+        self._rec_blink_timer.stop()
+        self._rec_elapsed_timer.stop()
+        self._rec_start_time = None
+        self._rec_indicator.hide()
+        self._set_theme_button_enabled(True)
+
+    def _set_theme_button_enabled(self, enabled: bool):
+        # Switching theme mid-recording would restyle the in-progress
+        # indicator's colours out from under it — simplest to just block
+        # the toggle for the duration, same as animation/static-capture
+        # gating each other via set_animation_gate.
+        self.theme_button.setEnabled(enabled)
+        effect = self.theme_button.graphicsEffect()
+        if not isinstance(effect, QtWidgets.QGraphicsOpacityEffect):
+            effect = QtWidgets.QGraphicsOpacityEffect(self.theme_button)
+            self.theme_button.setGraphicsEffect(effect)
+        effect.setOpacity(1.0 if enabled else 0.35)
 
     def _on_record_clicked(self):
         self.record_control.start_countdown(3)
@@ -2962,10 +3099,12 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self._record_frame_timer.setInterval(round(1000 / self.record_control.fps()))
         self._record_frame_timer.start()
         self.record_control.enter_recording()
+        self._start_rec_indicator()
 
     def _on_record_frame_tick(self):
         if self.plotter is None:
             self._record_frame_timer.stop()
+            self._stop_rec_indicator()
             return
         try:
             self.plotter.write_frame()
@@ -2988,6 +3127,7 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
 
     def _on_record_stop_clicked(self):
         self._record_frame_timer.stop()
+        self._stop_rec_indicator()
         mwriter = getattr(self.plotter, "mwriter", None) if self.plotter is not None else None
         if mwriter is not None:
             try:
@@ -3023,7 +3163,10 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
             self.record_control.reset_idle()
             return
         dest, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Recording", str(Path.home() / "recording.mp4"), "MP4 Video (*.mp4)"
+            self,
+            "Save Recording",
+            str(Path.home() / f"{self._default_export_name('recording')}.mp4"),
+            "MP4 Video (*.mp4)",
         )
         if not dest:
             return
@@ -3060,6 +3203,7 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self.elevation_row.stop()
 
         self._record_frame_timer.stop()
+        self._stop_rec_indicator()
         if self._record_tmp_path and Path(self._record_tmp_path).exists():
             try:
                 os.remove(self._record_tmp_path)
@@ -3146,6 +3290,7 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self.reset_button.apply_theme(palette)
         self.docs_button.apply_theme(palette)
         self.github_button.apply_theme(palette)
+        self._update_rec_indicator_theme()
         _set_titlebar_theme(self, self._is_dark)
 
     def closeEvent(self, event):

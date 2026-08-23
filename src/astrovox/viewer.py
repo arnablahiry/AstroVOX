@@ -574,6 +574,7 @@ class KinematicVolumeViewer:
             self._colorbar_frame_actor,
             self._colorbar_tick_actor,
             self._colorbar_title_actor,
+            *self._colorbar_value_label_actors,
         ):
             if actor is not None:
                 actor.SetVisibility(self.colorbar_visible)

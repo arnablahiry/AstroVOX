@@ -19,6 +19,9 @@ dependencies = [
   "pyobjc-framework-Cocoa>=9; sys_platform == 'darwin'",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
 [project.scripts]
 astrovox = "astrovox.gui:main"
 
@@ -27,3 +30,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

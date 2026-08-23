@@ -3,6 +3,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/arnablahiry/AstroVOX/actions/workflows/tests.yml"><img src="https://github.com/arnablahiry/AstroVOX/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"></a>
+</p>
+
+<p align="center">
   A GUI for visualizing astrophysical and cosmological 3D data cubes — spatial (PPP) cubes and position-position-velocity (PPV) cubes alike — powered by <a href="https://pyvista.org/">PyVista</a>.
 </p>
 
@@ -62,6 +68,13 @@ For an editable development install:
 
 ```bash
 pip install -e .
+```
+
+To also run the test suite:
+
+```bash
+pip install -e ".[test]"
+pytest
 ```
 
 ## Usage

@@ -1,0 +1,59 @@
+name: Deploy AstroVOX docs to user Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/astrovox/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[docs]"
+
+      - name: Copy assets into docs/_static
+        run: |
+          mkdir -p docs/_static
+          cp assets/volumetric_ico.png docs/_static/volumetric_ico.png
+          cp assets/astrovox_banner.png docs/_static/astrovox_banner.png
+
+      - name: Build Sphinx docs
+        run: sphinx-build -b html docs docs/_build/html -W --keep-going
+
+      - name: Checkout Pages repo
+        uses: actions/checkout@v4
+        with:
+          repository: arnablahiry/arnablahiry.github.io
+          token: ${{ secrets.DEPLOY_DOCS }}
+          path: pages_repo
+
+      - name: Sync built site to pages repo
+        run: |
+          mkdir -p pages_repo/software/astrovox
+          rsync -av --delete docs/_build/html/ pages_repo/software/astrovox/
+          cd pages_repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add software/astrovox
+          if git diff --cached --quiet; then
+            echo "No changes to deploy"
+          else
+            git commit -m "Auto-deploy astrovox docs from ${{ github.sha }}"
+            git push origin main
+          fi

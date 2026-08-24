@@ -21,6 +21,12 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+docs = [
+  "sphinx>=7",
+  "sphinx-book-theme>=1.1",
+  "sphinx-autoapi>=3",
+  "sphinx-design>=0.5",
+]
 
 [project.scripts]
 astrovox = "astrovox.gui:main"

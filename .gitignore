@@ -26,6 +26,11 @@ htmlcov/
 # Notebook checkpoints
 .ipynb_checkpoints/
 
+# Sphinx build output
+docs/_build/
+docs/_static/*.png
+!docs/_static/.gitkeep
+
 # OS files
 .DS_Store
 

@@ -36,10 +36,8 @@ from astrovox.viewer import KinematicVolumeViewer, load_cube_with_metadata, nump
 
 def _set_titlebar_theme(widget, is_dark: bool):
     """On macOS, force the native window titlebar to match the app's own
-    light/dark theme (rather than always following the system-wide
-    appearance) — e.g. the light-mode titlebar stays light even under
-    macOS dark mode, the way apps like Songs do. Silently a no-op
-    anywhere this isn't possible (non-macOS, or pyobjc unavailable)."""
+    light/dark theme rather than the system-wide appearance. Silently a
+    no-op anywhere this isn't possible (non-macOS, or pyobjc unavailable)."""
     import sys
 
     if sys.platform != "darwin":
@@ -178,8 +176,8 @@ if QtInteractor is not None:
             self._suppress_free_revert = False
 
         def _roll_by_degrees(self, degrees):
-            # Confirmed inverted on real hardware: rotation needs to spin
-            # opposite to the finger twist direction Qt reports.
+            # Qt reports the twist direction inverted relative to the
+            # visual rotation it should produce.
             degrees = -degrees
             renderer = self.renderer
             camera = renderer.GetActiveCamera()
@@ -286,11 +284,10 @@ _LIGHT_COLORMAPS = ["cubehelix_r", "gray_r", "bone_r", "pink_r", "afmhot_r"]
 def _compose_colorbar_title(name: str, unit: str) -> str:
     """bold(quantity name) on its own line, [unit] regular beneath it —
     e.g. **Intensity**\\n[Jy/beam]. Rendered via mathtext's own
-    \\mathbf{}, since _build_mathtext_actor2d now renders the colorbar
-    title at "normal" base weight (see viewer.py) specifically so this
-    mixed weighting can happen at all. Spaces inside \\mathbf{} are
-    escaped as "\\ " — bare spaces are collapsed by math mode, which is
-    why an unescaped multi-word name used to render with no gaps at all
+    \\mathbf{}; the colorbar title's base weight is "normal" (see
+    _build_mathtext_actor2d in viewer.py) so this mixed weighting can
+    render at all. Spaces inside \\mathbf{} are escaped as "\\ " — bare spaces are collapsed by math mode, which is
+    an unescaped multi-word name would otherwise render with no gaps
     (e.g. "Total Matter Density" -> "TotalMatterDensity")."""
     name = name.strip()
     unit = unit.strip()
@@ -560,8 +557,8 @@ class PillSelector(QtWidgets.QWidget if QtWidgets is not None else object):
                 btn.setFixedWidth(pill_width)
             elif expand:
                 # Stretch to share the row equally instead of hugging
-                # its own text width — used to make the pill row fill
-                # whatever width its container gives it.
+                # its own text width, so the pill row fills whatever
+                # width its container gives it.
                 btn.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
             btn.clicked.connect(lambda _checked, v=val: self.valueChanged.emit(v))
             self._group.addButton(btn)
@@ -578,9 +575,9 @@ class PillSelector(QtWidgets.QWidget if QtWidgets is not None else object):
 
     def set_selected(self, value):
         """Change the selected pill programmatically, without emitting
-        valueChanged — used to revert to "Free" when the camera moves for
-        a reason other than clicking a snap pill (e.g. manual rotate/pan/
-        zoom), which must not re-trigger a snap."""
+        valueChanged. Used when the camera moves for a reason other than
+        clicking a snap pill (e.g. manual rotate/pan/zoom), which must
+        not re-trigger a snap."""
         btn = self._buttons.get(value)
         if btn is not None:
             btn.setChecked(True)
@@ -676,8 +673,8 @@ class ToggleGrid(QtWidgets.QWidget if QtWidgets is not None else object):
         return 0
 
     def set_pill_enabled(self, label, enabled: bool):
-        """Disable/dim (or restore) a single pill — used to gate the
-        Scalebar pill for numpy cubes until a valid Field of view has
+        """Disable/dim (or restore) a single pill. Used to gate the
+        Scalebar pill for numpy cubes until a valid field of view has
         been entered."""
         btn = self._buttons.get(label)
         if btn is None:
@@ -1447,8 +1444,8 @@ class StaticFrameControl(QtWidgets.QWidget if QtWidgets is not None else object)
         self._box_row.setContentsMargins(10, 0, 10, 0)
         self._box_row.setSpacing(6)
 
-        # A crop/viewfinder-style "four corners" glyph — the closest
-        # single Unicode symbol to the requested corner-bracket icon.
+        # A crop/viewfinder-style "four corners" glyph as a single
+        # Unicode symbol, standing in for a corner-bracket icon.
         self._icon = QtWidgets.QLabel("⛶", self._accent_box)
         self._icon.setFixedSize(20, 20)
         self._icon.setAlignment(QtCore.Qt.AlignCenter)
@@ -1818,7 +1815,7 @@ class ProjectionControl(QtWidgets.QWidget if QtWidgets is not None else object):
             f"font-family: Georgia, 'Times New Roman'; font-size: 11px; font-weight: bold; }}"
         )
         # Blocky/segmented fill (chunk width + margin) rather than a
-        # smooth gradient, per the "blocky loading bar" ask.
+        # smooth gradient.
         self._progress.setStyleSheet(f"""
             QProgressBar {{
                 background: {palette['ENTRY_BG']};
@@ -2527,11 +2524,9 @@ class ProjectionWindow(QtWidgets.QMainWindow if QtWidgets is not None else objec
         self._wcs2d = result.get("wcs2d")
         # The window chrome (this column, labels, etc) always matches the
         # *actual* app theme and never changes. The plot theme below is
-        # fully independent in both directions: it never affects the main
-        # window, and — just as deliberately — a fresh window's own plot
-        # theme always starts at a fixed "Dark" rather than mirroring
-        # whatever the main theme happens to be at open time (which read
-        # as the main theme "leaking into" the plot).
+        # fully independent: it never affects the main window, and a
+        # fresh window's own plot theme always starts at a fixed "Dark"
+        # rather than mirroring the main theme at open time.
         self._is_dark = is_dark
         self._plot_dark = True
         self._clim = [self._raw_min, self._raw_max]
@@ -2543,8 +2538,8 @@ class ProjectionWindow(QtWidgets.QMainWindow if QtWidgets is not None else objec
         self._show_axes_labels = True
 
         # Prefilled from the main viewer's own spatial scale (voxel size)
-        # when it actually has one — left blank otherwise, per the "only
-        # if the main viewer has proper FOV and units" rule.
+        # only when it has a real field of view and units — left blank
+        # otherwise.
         has_real_scale = result["extent_unit"] != "px"
         self._default_spatial_res = result["px_size"] if has_real_scale else None
         self._default_spatial_unit = result["extent_unit"] if has_real_scale else ""
@@ -2964,14 +2959,14 @@ class ProjectionWindow(QtWidgets.QMainWindow if QtWidgets is not None else objec
         with matplotlib.rc_context({"font.family": "serif"}):
             self._fig.clear()
             # Fixed margins, set *before* the axes (and, later, the
-            # divider-appended colorbar axis) are created — so both get
-            # positioned against this final layout from the start. Doing
-            # this afterwards (e.g. via tight_layout(), or subplots_adjust
-            # called post hoc) moves the main axes but leaves the already-
-            # appended colorbar axis where it was computed relative to the
-            # *old* position, which is what caused the overlapping/
-            # misplaced colorbar. Generous left margin for the Declination
-            # label, right margin sized for the colorbar + its label.
+            # divider-appended colorbar axis) are created, so both get
+            # positioned against this final layout from the start. Setting
+            # margins afterwards (e.g. via tight_layout(), or a post hoc
+            # subplots_adjust) moves the main axes but leaves an
+            # already-appended colorbar axis positioned relative to the
+            # *old* layout, producing an overlapping/misplaced colorbar.
+            # Generous left margin for the Declination label, right margin
+            # sized for the colorbar + its label.
             self._fig.subplots_adjust(left=0.17, right=0.85, bottom=0.12, top=0.90)
             fg = "white" if self._plot_dark else "black"
             bg = "black" if self._plot_dark else "white"
@@ -3012,10 +3007,8 @@ class ProjectionWindow(QtWidgets.QMainWindow if QtWidgets is not None else objec
 
             unit = self._spatial_unit()
             tick_fontsize = 9
-            axis_label_fontsize = tick_fontsize + 3  # +1 over ticks, then +2 more per request
+            axis_label_fontsize = tick_fontsize + 3
             if self._show_title:
-                # A touch less pad than before — title sits slightly
-                # closer to the plot now.
                 ax.set_title(self._plot_title_edit.text(), color=fg, pad=14)
 
             if self._wcs2d is not None:
@@ -3068,9 +3061,9 @@ class ProjectionWindow(QtWidgets.QMainWindow if QtWidgets is not None else objec
                 # mpl's default colorbar, which can end up taller than
                 # the plotted extent) — placed by hand at fixed figure
                 # coordinates matching the main axes' own fixed margins
-                # above, instead of via make_axes_locatable(), which
-                # silently mis-measures WCSAxes (it kept coming out with
-                # the *same* bbox as the main axes, overlapping it).
+                # above. make_axes_locatable() mis-measures WCSAxes,
+                # producing a colorbar axis with the same bbox as the
+                # main axes and overlapping it.
                 cax = self._fig.add_axes([0.87, 0.12, 0.035, 0.78])
                 cax.set_facecolor(bg)
                 cbar = self._fig.colorbar(im, cax=cax)
@@ -3123,9 +3116,9 @@ class ProjectionWindow(QtWidgets.QMainWindow if QtWidgets is not None else objec
 
             # No tight_layout()/subplots_adjust() call here — the fixed
             # margins set at the top of this method (before the colorbar
-            # axis was appended) are the final layout; touching it again
-            # now would only re-introduce the same axes/colorbar
-            # misalignment that reordering this fixed.
+            # axis was appended) are the final layout; adjusting margins
+            # again now would misalign the axes and the already-placed
+            # colorbar.
             self._canvas.draw_idle()
 
     def _apply_window_theme(self):
@@ -3297,16 +3290,13 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self._is_dark = True
         self.setWindowTitle("AstroVOX")
         # Square viewport (side == window height) + fixed-width controls
-        # column, with no leftover slack — a wider default just left a
-        # blank strip between the cube and the column. Fixed (not just
-        # defaulted) so the square-viewport/column layout can't be thrown
-        # off by a manual resize. The controls column's tallest state is
-        # a numpy cube (ManualInfoForm's extra rows on top of everything
-        # else) — kept at 844 (rather than growing the window further)
-        # by shrinking the Visual Aesthetics pills (see ToggleGrid) just
-        # enough for that tallest state to fit without Qt silently
-        # compressing row spacing to squeeze it in (seen as uneven gaps
-        # between pills, only when a numpy cube was loaded).
+        # column, with no leftover slack. Fixed (not just defaulted) so
+        # the square-viewport/column layout can't be thrown off by a
+        # manual resize. The controls column's tallest state is a numpy
+        # cube (ManualInfoForm's extra rows on top of everything else);
+        # 844 is sized so that state fits without Qt compressing row
+        # spacing between the Visual Aesthetics pills (see ToggleGrid)
+        # to squeeze it in.
         viewport_side = 844
         controls_col_width = 400
         self.setFixedSize(viewport_side + controls_col_width, viewport_side)
@@ -3742,15 +3732,12 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self.viewer._update_scale_bar()
         self.viewer._rebuild_colorbar()
         self.plotter.render()
-        # The very first _apply_theme() call happens in __init__, before
-        # the window has ever been shown — a stylesheet set on a widget
-        # that isn't on screen yet gets cached with wrong-looking colors
-        # (pill backgrounds render too dark) until something re-applies it
-        # post-show, which is why a manual theme toggle "fixes" it: that
-        # setStyleSheet call happens on an already-visible widget. Now that
-        # the loaded page is actually on screen, re-run it once so launch
-        # matches a post-toggle look exactly instead of merely re-polishing
-        # the checked-state highlight (which isn't the whole story here).
+        # A stylesheet set on a widget before it's ever been shown (as
+        # happens with the very first _apply_theme() call, in __init__)
+        # gets cached with wrong-looking colors — pill backgrounds render
+        # too dark until setStyleSheet runs again on an already-visible
+        # widget. Re-run theming here, now that the loaded page is
+        # actually on screen, so launch matches its fully-themed look.
         self._apply_theme()
         # cube_outline_row.set_toggle_width() and manual_info_form's own
         # pill-height sync (inside _apply_theme) each read another
@@ -3960,10 +3947,10 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
     def _on_static_capture_clicked(self):
         if self.plotter is None:
             return
-        # Defer the actual VTK render/screenshot to the next event-loop tick so
-        # it doesn't run re-entrantly inside the button's mousePressEvent while
-        # Qt is still mid-repaint from the click's own style changes (this was
-        # corrupting nearby widget text and emitting QPainter warnings).
+        # Defer the actual VTK render/screenshot to the next event-loop tick:
+        # running it re-entrantly inside the button's mousePressEvent, while
+        # Qt is still mid-repaint from the click's own style changes,
+        # corrupts nearby widget text and emits QPainter warnings.
         QtCore.QTimer.singleShot(0, self._do_capture_static_frame)
 
     def _do_capture_static_frame(self):
@@ -4273,12 +4260,10 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
     def _show_projection_window(self, result):
         window = ProjectionWindow(result, self._is_dark, parent=self)
         window.show()
-        # The very first theme/style pass happens before the window has
-        # ever been on screen — like CubeViewerApp's own first paint (see
-        # _finalize_cube_view), a stylesheet applied pre-show can render
-        # wrong (here: the aesthetics pill grid overlapping itself) until
-        # something re-applies it post-show. Two passes to fully converge,
-        # same as there.
+        # A stylesheet applied before the window has ever been on screen
+        # can render wrong (here: the aesthetics pill grid overlapping
+        # itself), same as CubeViewerApp's own first paint (see
+        # _finalize_cube_view) — re-run it post-show, twice, to converge.
         QtCore.QTimer.singleShot(0, window._apply_window_theme)
         QtCore.QTimer.singleShot(0, window._apply_window_theme)
         # Keep a reference — otherwise Qt garbage-collects the window the
@@ -4397,16 +4382,14 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
         self._record_fail_streak = 0
         try:
             # format="FFMPEG" is forced explicitly rather than left to
-            # imageio's extension-based auto-detection — on at least one
-            # tested environment (a separate conda env without a properly
-            # registered ffmpeg plugin), get_writer() silently fell back to
-            # the *tifffile* plugin for a ".mp4" path instead of raising,
-            # and every frame then failed with a cryptic
-            # "TiffWriter.write() got an unexpected keyword argument 'fps'"
-            # deep inside imageio. Forcing the format means a missing/broken
-            # ffmpeg plugin now fails loudly and immediately, right here,
-            # with a clear message — instead of quietly writing frames to
-            # a plugin that can't actually produce a video.
+            # imageio's extension-based auto-detection: without a properly
+            # registered ffmpeg plugin, get_writer() can silently fall back
+            # to the *tifffile* plugin for a ".mp4" path instead of
+            # raising, and every subsequent frame write then fails with a
+            # cryptic "TiffWriter.write() got an unexpected keyword
+            # argument 'fps'" deep inside imageio. Forcing the format
+            # means a missing/broken ffmpeg plugin fails loudly and
+            # immediately, right here, with a clear message.
             #
             # -movflags +faststart moves the mp4 "moov" index to the front
             # of the file once ffmpeg finalizes it — without this, ffmpeg's
@@ -4458,11 +4441,10 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
             self._record_fail_streak = 0
         except Exception:
             # Tolerate a handful of failures in a row rather than aborting
-            # on the very first one — e.g. the ffmpeg subprocess spawned
-            # by open_movie() may not have finished starting up yet when
-            # the first tick or two fires, which previously looked like
-            # "recording instantly fails" even though it was just a
-            # startup race, not a real, persistent problem.
+            # on the very first one — the ffmpeg subprocess spawned by
+            # open_movie() may not have finished starting up yet when the
+            # first tick or two fires, which is a transient startup race
+            # rather than a persistent failure.
             self._record_fail_streak += 1
             print(f"Recording frame capture failed (attempt {self._record_fail_streak}):")
             traceback.print_exc()
@@ -4571,10 +4553,9 @@ class CubeViewerApp(QtWidgets.QMainWindow if QtWidgets is not None else object):
             self.plotter = None
             self.viewer = None
 
-        # Always land back on the dark theme, regardless of what the
-        # user had selected before resetting — a fresh, known starting
-        # point rather than carrying light mode (which the landing
-        # page/controls were never as thoroughly themed for) forward.
+        # Always land back on the dark theme rather than carrying
+        # whatever theme was active forward — a fresh, known starting
+        # point for the landing page.
         self._is_dark = True
         self._apply_theme()
 
@@ -4712,13 +4693,12 @@ def main(argv: list[str] | None = None) -> int:
     window.show()
     # show() makes the window visible at whatever geometry/stylesheet
     # state its children have *right now* — both only actually settle
-    # once the event loop gets a turn or two, which is why the column
-    # can briefly flash as a cluster of unlaid-out/unstyled widgets
-    # before snapping into its real layout (the same class of "first
-    # paint" issue _finalize_cube_view works around post-cube-load, just
-    # not yet worked around for the drop-zone page shown at launch).
-    # Forcing those passes here, before control returns to the user,
-    # means the very first visible frame is already the settled one.
+    # once the event loop gets a turn or two, so the column can briefly
+    # flash as a cluster of unlaid-out/unstyled widgets before snapping
+    # into its real layout (the same class of "first paint" issue
+    # _finalize_cube_view works around post-cube-load). Forcing those
+    # passes here, before control returns to the user, means the very
+    # first visible frame is already the settled one.
     QtWidgets.QApplication.processEvents()
     window._apply_theme()
     QtWidgets.QApplication.processEvents()

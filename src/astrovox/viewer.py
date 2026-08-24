@@ -149,7 +149,7 @@ class KinematicVolumeViewer:
         # ("RA", "Dec", "km/s") for an observed cube or ("kpc", "kpc",
         # "km/s") for a simulated one.
         self.axis_labels = axis_labels or ("X", "Y", "Z")
-        # (value_per_voxel, unit) used to convert the fixed-length scale
+        # (value_per_voxel, unit) that converts the fixed-length scale
         # bar's on-screen size into a physical length, e.g. (0.025,
         # "arcsec"); None means the scale is unknown, so the bar shows a
         # static "px" label instead of a dynamically-updating length.
@@ -279,16 +279,13 @@ class KinematicVolumeViewer:
                 "ModifiedEvent", lambda obj, evt: self._update_scale_bar()
             )
         self._build_cube_axes()
-        # Registered unconditionally (not just when axis_tick_formatters
-        # is already populated) — a numpy cube starts with no formatters
-        # set at all (the user hasn't typed a Field of view/Spectral
-        # Resolution yet) and only gets them later via
-        # set_manual_axis_scale(); gating registration on their presence
-        # at construction time meant this observer was silently never
-        # added for numpy cubes, so tick/title orientation would freeze
-        # after being set once and never track further camera moves
-        # (rotate, or the axis-snap pills) the way it does for FITS/HDF5
-        # cubes, whose formatters are already known at construction.
+        # Registered unconditionally rather than only when
+        # axis_tick_formatters is already populated: a numpy cube starts
+        # with no formatters set at all and only gets them later via
+        # set_manual_axis_scale(), so the observer must exist from
+        # construction for tick/title orientation to keep tracking
+        # further camera moves (rotate, or the axis-snap pills) once
+        # formatters do arrive.
         self.plotter.renderer.GetActiveCamera().AddObserver(
             "ModifiedEvent", lambda obj, evt: self._maybe_rebuild_custom_tick_labels()
         )
@@ -349,12 +346,10 @@ class KinematicVolumeViewer:
         lo, hi = self._value_range_for_clim(self.current_clim)
 
         # Rebuilding the transfer functions fresh from the same canonical
-        # colour/opacity source every time (rather than incrementally
-        # rescaling whatever nodes are already there) avoids any risk of
-        # drift compounding over many rapid updates — a real bug hit
-        # during development, where repeatedly rescaling in place caused
-        # the effective range to visibly wander after a couple hundred
-        # slider ticks.
+        # colour/opacity source every time, rather than incrementally
+        # rescaling whatever nodes are already there, avoids drift
+        # compounding over many rapid updates — repeatedly rescaling in
+        # place lets the effective range wander after enough slider ticks.
         n = 256
         colors = get_cmap_safe(self.cmap)(np.linspace(0.0, 1.0, n))
         alphas = opacity_transfer_function(self.opacity, n).astype(np.float64) / 255.0
@@ -382,8 +377,8 @@ class KinematicVolumeViewer:
         this never recreates actors or forces a synchronous VTK render
         pass (GetScalarBarRect there needs one) — at slider-drag
         frequency, that synchronous render is reentrant enough with
-        Qt's own paint/layout cycle to visibly corrupt unrelated widget
-        geometry (observed as overlapping Visual Aesthetics pills).
+        Qt's own paint/layout cycle to corrupt unrelated widget geometry,
+        showing up as overlapping Visual Aesthetics pills.
         Returns False (caller should fall back to a full rebuild) if the
         label actors don't exist yet."""
         labels = self._colorbar_value_label_actors
@@ -1061,9 +1056,9 @@ class KinematicVolumeViewer:
         from vtkmodules.util import numpy_support
 
         # "normal" base weight, not the usual bold default — the colorbar
-        # title text itself now carries an explicit \mathbf{...} span
-        # around just the quantity name (see CubeViewerApp's colorbar
-        # title composition), with the unit suffix meant to read regular.
+        # title text carries an explicit \mathbf{...} span around just
+        # the quantity name (see CubeViewerApp's colorbar title
+        # composition), with the unit suffix meant to read regular.
         rgba = _render_mathtext_rgba(text, color=color_rgb, fontsize=font_size, fontweight="normal")
         h, w = rgba.shape[:2]
 
@@ -1400,11 +1395,9 @@ class KinematicVolumeViewer:
         # add_scalar_bar() unconditionally reads mapper.lookup_table
         # (== mapper._lut) — pyvista sets that as a side effect of
         # add_volume(), but it isn't reliably still present on every
-        # later call here (observed going missing between an earlier
-        # successful rebuild and a subsequent one, cause not fully
-        # pinned down further than "a pyvista/VTK volume-mapper
-        # bookkeeping quirk"); rebuilding it explicitly if absent avoids
-        # an AttributeError that otherwise silently drops the colorbar.
+        # later call here (a pyvista/VTK volume-mapper bookkeeping
+        # quirk); rebuilding it explicitly if absent avoids an
+        # AttributeError that otherwise silently drops the colorbar.
         mapper = self._volume_actor.mapper
         if getattr(mapper, "_lut", None) is None:
             # Built from colour + the *actual* opacity curve (matching
@@ -1467,10 +1460,10 @@ class KinematicVolumeViewer:
             self._colorbar_title_actor = None
 
         if self.colorbar_title.strip():
-            # The title is now name + unit on two lines (see
+            # The title is name + unit on two lines (see
             # CubeViewerApp._compose_colorbar_title) — the anchor is
             # nudged to keep the *bottom* line's gap above the
-            # tick-label row reading the same as it did with one line.
+            # tick-label row consistent regardless of line count.
             self._colorbar_title_actor = self._build_mathtext_actor2d(
                 self.colorbar_title, self._theme_rgb(), self._label_font_size - 3, cb_x + cb_w / 2, cb_y + cb_h - 0.002
             )

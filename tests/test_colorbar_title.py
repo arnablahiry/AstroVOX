@@ -11,8 +11,8 @@ def test_name_and_unit_render_bold_name_then_bracketed_unit_on_next_line():
 
 
 def test_spaces_in_the_name_are_escaped_for_math_mode():
-    # Bare spaces are collapsed inside $...$ math mode — this is exactly
-    # the "TotalMatterDensity" (no spaces) bug this escaping fixes.
+    # Bare spaces are collapsed inside $...$ math mode, which would
+    # otherwise render "Total Matter Density" as "TotalMatterDensity".
     title = _compose_colorbar_title("Total Matter Density", "Msun/h")
     assert "Total\\ Matter\\ Density" in title
     assert "Total Matter Density" not in title
